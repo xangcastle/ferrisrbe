@@ -15,7 +15,7 @@ Esto permite bazelizar proyectos Rust existentes sin modificar su estructura
 interna ni migrar completamente a rules_proto.
 """
 
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 # ============================================================================
@@ -198,6 +198,49 @@ alias(
     name = "worker",
     actual = ":rbe-worker",
     visibility = ["//visibility:public"],
+)
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+rust_test(
+    name = "rbe_lib_test",
+    crate = ":rbe_lib",
+    edition = "2021",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    deps = [
+        ":build_script",
+        "@crates//:ahash",
+        "@crates//:anyhow",
+        "@crates//:async-stream",
+        "@crates//:bytes",
+        "@crates//:chrono",
+        "@crates//:crossbeam",
+        "@crates//:dashmap",
+        "@crates//:fastrand",
+        "@crates//:futures",
+        "@crates//:hex",
+        "@crates//:once_cell",
+        "@crates//:parking_lot",
+        "@crates//:prost",
+        "@crates//:prost-types",
+        "@crates//:serde",
+        "@crates//:serde_bytes",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+        "@crates//:uuid",
+    ],
 )
 
 # ============================================================================
