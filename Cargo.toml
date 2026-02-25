@@ -14,7 +14,7 @@ path = "src/bin/worker.rs"
 [dependencies]
 tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
-prost-types = "0.13"
+prost-types = "0.14"
 tokio = { version = "1.43", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
