@@ -46,7 +46,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Mount Bazel cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
           key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
