@@ -1,0 +1,4 @@
+./bazel-*/
+./examples/**/bazel-*/
+.bazel/
+target/

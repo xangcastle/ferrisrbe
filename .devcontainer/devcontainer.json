@@ -1,0 +1,92 @@
+{
+  "name": "FerrisRBE Development",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-1-bookworm",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "BazelBuild.vscode-bazel",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "ms-azuretools.vscode-docker",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.features": "all",
+        "rust-analyzer.checkOnSave.command": "clippy",
+        "editor.formatOnSave": true,
+        "editor.formatOnPaste": true
+      }
+    }
+  },
+
+  "forwardPorts": [
+    9092,
+    9094,
+    8080,
+    6379,
+    30092,
+    30094,
+    30080
+  ],
+  
+  "portsAttributes": {
+    "9092": {
+      "label": "RBE Server gRPC",
+      "onAutoForward": "notify"
+    },
+    "9094": {
+      "label": "CAS Storage gRPC",
+      "onAutoForward": "silent"
+    },
+    "8080": {
+      "label": "CAS HTTP",
+      "onAutoForward": "openPreview"
+    },
+    "6379": {
+      "label": "Redis",
+      "onAutoForward": "silent"
+    },
+    "30092": {
+      "label": "RBE NodePort",
+      "onAutoForward": "notify"
+    },
+    "30094": {
+      "label": "CAS NodePort",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+
+  "remoteUser": "vscode",
+  
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
+
+  "runArgs": [
+    "--network=host"
+  ],
+
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  }
+}

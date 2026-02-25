@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rbe-cas-pvc
+  namespace: rbe
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  # Para Docker Desktop, usa el storage class por defecto
+  # En producción, especifica tu storage class
+  # storageClassName: standard

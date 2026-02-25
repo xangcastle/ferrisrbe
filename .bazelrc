@@ -1,0 +1,128 @@
+# ============================================================================
+# Configuración de Bazel para FerrisRBE
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Opciones de build generales
+# ----------------------------------------------------------------------------
+build --symlink_prefix=/
+
+# Usar el nuevo sistema de hermeticidad para acciones
+build --incompatible_strict_action_env
+
+# Habilitar sandboxing para mejor hermeticidad
+build --spawn_strategy=sandboxed,local
+
+# Mostrar progreso detallado
+build --show_progress
+build --progress_report_interval=30
+
+# Colores en salida
+build --color=yes
+
+# ----------------------------------------------------------------------------
+# Configuración específica para Rust
+# ----------------------------------------------------------------------------
+
+# Optimizaciones para release
+build:release --compilation_mode=opt
+build:release --@rules_rust//rust/settings:extra_rustc_flags=-C,opt-level=3,-C,lto=fat,-C,codegen-units=1,-C,panic=abort
+
+# Asegurar que el compilador de C y el Linker también se optimizan al máximo
+build:release --copt=-O3
+build:release --linkopt=-Wl,-O2
+
+# Configuración para desarrollo (compilación rápida)
+build:dev --compilation_mode=fastbuild
+build:dev --@rules_rust//rust/settings:extra_rustc_flags=-C,opt-level=0,-C,debuginfo=2
+
+# Habilitar análisis de clippy por defecto
+# build --@rules_rust//:clippy_flag
+
+# ----------------------------------------------------------------------------
+# Configuración de tests
+# ----------------------------------------------------------------------------
+
+test --test_output=errors
+test --test_summary=detailed
+
+# ----------------------------------------------------------------------------
+# Configuración de plataformas
+# ----------------------------------------------------------------------------
+
+# Configuración para compilar para Linux AMD64 (cross-compilación desde macOS)
+build:linux_amd64 --platforms=//platforms:linux_amd64
+
+# Configuración para ARM64
+build:arm64 --platforms=//platforms:linux_arm64
+
+# ----------------------------------------------------------------------------
+# Configuración de crate_universe
+# ----------------------------------------------------------------------------
+
+# Permitir repin automático cuando sea necesario (deshabilitar en CI)
+# build --@rules_rust//crate_universe:repin=auto
+
+# ----------------------------------------------------------------------------
+# Configuración de OCI
+# ----------------------------------------------------------------------------
+
+# Plataforma por defecto para imágenes de contenedor
+# build --@rules_oci//oci:allow_unauthenticated_registries=true
+
+# ----------------------------------------------------------------------------
+# Configuración de rendimiento
+# ----------------------------------------------------------------------------
+
+# Usar workers de persistencia para compilación incremental
+# build --experimental_persistent_worker
+
+# Habilitar multiplex workers  
+# build --experimental_worker_multiplex
+
+# Memoria para el heap de Bazel (ajustar según tu máquina)
+startup --host_jvm_args=-Xmx4g
+
+# ----------------------------------------------------------------------------
+# Configuración de CI
+# ----------------------------------------------------------------------------
+
+# Configuración específica para CI (GitHub Actions, etc.)
+build:ci --config=release
+build:ci --noshow_progress
+build:ci --curses=no
+build:ci --announce_rc
+build:ci --show_timestamps
+build:ci --terminal_columns=80
+
+# No repin automático en CI
+build:ci --@rules_rust//crate_universe:repin=off
+
+# ----------------------------------------------------------------------------
+# Configuración de debugging
+# ----------------------------------------------------------------------------
+
+# Configuración para debugging con rust-gdb/lldb
+build:debug --compilation_mode=dbg
+build:debug --strip=never
+build:debug --@rules_rust//rust/settings:extra_rustc_flags=-C,debuginfo=2
+
+# ----------------------------------------------------------------------------
+# Alias útiles para targets frecuentes
+# ----------------------------------------------------------------------------
+
+# Compilar el servidor
+# bazel build //:server
+
+# Compilar el worker
+# bazel build //:worker
+
+# Compilar ambos
+# bazel build //...
+
+# Construir imágenes de contenedor
+# bazel build //oci:server_tarball
+# bazel build //oci:worker_tarball
+
+# Ejecutar tests
+# bazel test //...

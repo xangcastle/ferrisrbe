@@ -1,0 +1,11 @@
+# Clippy configuration
+# This file configures clippy lints for the FerrisRBE project
+
+# Allow certain lints in generated code
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# Doc warnings that affect generated protobuf code
+allow = [
+    "clippy::doc_lazy_continuation",
+]

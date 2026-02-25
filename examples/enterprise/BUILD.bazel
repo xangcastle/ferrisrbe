@@ -1,0 +1,94 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+# ==========================================
+# 1. CAS Stress: Very Large Files
+# ==========================================
+
+# Generates ~100MB of data
+genrule(
+    name = "cas_stress_100mb",
+    outs = ["payload_100mb.dat"],
+    cmd = "python3 -c 'import sys; data = bytes(range(256)) * 4000; sys.stdout.buffer.write(data * 100)' > $@",
+    tags = ["no-remote-cache"],
+)
+
+# Generates ~500MB of data
+genrule(
+    name = "cas_stress_500mb",
+    outs = ["payload_500mb.dat"],
+    cmd = "python3 -c 'import sys; data = bytes(range(256)) * 4000; sys.stdout.buffer.write(data * 500)' > $@",
+    tags = ["no-remote-cache"],
+)
+
+# Simple read/write heavy copy action for 500MB
+genrule(
+    name = "cas_stress_read_write",
+    srcs = [":cas_stress_500mb"],
+    outs = ["payload_500mb_copy.dat"],
+    cmd = "cat $(SRCS) > $@",
+)
+
+# ==========================================
+# 2. Tree Stress: Massive Directory Trees
+# ==========================================
+
+genrule(
+    name = "tree_stress_generate",
+    outs = ["massive_tree"],
+    cmd = """
+python3 -c '
+import os
+os.makedirs("$@", exist_ok=True)
+for i in range(50000):
+    with open(f"$@/file_{i}.txt", "w") as f:
+        f.write(f"Test content {i}\\n")
+'
+    """,
+    tags = ["no-remote-cache"],
+)
+
+genrule(
+    name = "tree_stress_consume",
+    srcs = [":tree_stress_generate"],
+    outs = ["tree_summary.txt"],
+    cmd = "find $(SRCS) -type f | wc -l > $@",
+)
+
+# ==========================================
+# 3. Concurrent Compilation Stress
+# ==========================================
+
+# Depends on abseil-cpp to force hundreds of actions
+cc_binary(
+    name = "massive_cpp_compilation",
+    srcs = ["empty.cc"],
+    deps = [
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/synchronization",
+        "@abseil-cpp//absl/time",
+        "@abseil-cpp//absl/base",
+    ],
+)
+
+# ==========================================
+# 4. Timeout/Flakiness Stress
+# ==========================================
+
+genrule(
+    name = "timeout_stress",
+    outs = ["never_finishes.txt"],
+    cmd = "sleep 300 && echo 'done' > $@",
+    tags = [
+        "no-cache",
+        "no-remote-cache",
+    ],
+)
+
+# Simple test target
+genrule(
+    name = "simple_test",
+    outs = ["output.txt"],
+    cmd = "echo 'Hello from remote' > $@",
+    tags = ["no-remote-cache"],
+)

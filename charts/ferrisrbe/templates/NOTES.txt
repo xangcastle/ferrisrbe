@@ -1,0 +1,45 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your FerrisRBE installation is now running in namespace {{ include "ferrisrbe.namespace" . }}.
+
+## Connection Information
+
+{{- if eq .Values.server.service.type "NodePort" }}
+Server (gRPC): localhost:{{ .Values.server.service.nodePort }}
+{{- else if eq .Values.server.service.type "LoadBalancer" }}
+Server (gRPC): {{ include "ferrisrbe.fullname" . }}-server.{{ include "ferrisrbe.namespace" . }}.svc.cluster.local:9092
+{{- else }}
+Server (gRPC): Use port-forward:
+  kubectl port-forward -n {{ include "ferrisrbe.namespace" . }} svc/{{ include "ferrisrbe.fullname" . }}-server 9092:9092
+{{- end }}
+
+## Verification
+
+Check if all pods are running:
+  kubectl get pods -n {{ include "ferrisrbe.namespace" . }}
+
+Check server logs:
+  kubectl logs -n {{ include "ferrisrbe.namespace" . }} -l app.kubernetes.io/component=server --tail=50
+
+Check worker logs:
+  kubectl logs -n {{ include "ferrisrbe.namespace" . }} -l app.kubernetes.io/component=worker --tail=50
+
+## Bazel Configuration
+
+Add to your `.bazelrc`:
+
+```
+# Remote Cache
+build:remote-cache --remote_cache=grpc://localhost:9092
+build:remote-cache --remote_upload_local_results=true
+
+# Remote Execution (Linux clients only)
+build:remote-exec --config=remote-cache
+build:remote-exec --remote_executor=grpc://localhost:9092
+build:remote-exec --remote_default_exec_properties=OSFamily=linux
+build:remote-exec --remote_default_exec_properties=container-image=
+```
+
+## Documentation
+
+For more information, visit: https://github.com/juhd/ferrisrbe

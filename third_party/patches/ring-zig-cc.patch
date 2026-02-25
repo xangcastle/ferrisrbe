@@ -1,0 +1,13 @@
+--- a/build.rs
++++ b/build.rs
+@@ -582,6 +582,10 @@ fn configure_cc(c: &mut cc::Build, target: &Target, c_root_dir: &Path, include_d
+         }
+     }
+ 
++    if let Some(target) = std::env::var("TARGET").ok() {
++        c.target(&target.replace("-unknown", ""));
++    }
++
+     // Allow cross-compiling without a target sysroot for these targets.
+     if (target.arch == WASM32)
+         || (target.os == "linux" && target.env == "musl" && target.arch != X86_64)

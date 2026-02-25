@@ -1,0 +1,77 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-worker
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: worker
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.worker.autoscaling.maxSurge | default 1 }}
+      maxUnavailable: {{ .Values.worker.autoscaling.maxUnavailable | default 0 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: worker
+      {{- include "ferrisrbe.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: worker
+        {{- include "ferrisrbe.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ferrisrbe.serviceAccountName" . }}
+      containers:
+        - name: worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "ferrisrbe.fullname" . }}-config
+          env:
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.worker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          {{- if .Values.worker.livenessProbe.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - echo "worker-alive" > /dev/null
+            initialDelaySeconds: {{ .Values.worker.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.worker.livenessProbe.periodSeconds }}
+          {{- end }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            {{- toYaml .Values.worker.securityContext | nindent 12 }}
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: {{ .Values.worker.workspace.sizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.worker.workspace.sizeLimit }}
+      nodeSelector:
+        {{- toYaml .Values.worker.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.worker.tolerations | nindent 8 }}
+      affinity:
+        {{- toYaml .Values.worker.affinity | nindent 8 }}
+{{- end }}

@@ -1,0 +1,52 @@
+{{- if .Values.bazelRemote.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-bazel-remote
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: bazel-remote
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: bazel-remote
+      {{- include "ferrisrbe.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: bazel-remote
+        {{- include "ferrisrbe.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: bazel-remote
+          image: "{{ .Values.bazelRemote.image.repository }}:{{ .Values.bazelRemote.image.tag }}"
+          imagePullPolicy: {{ .Values.bazelRemote.image.pullPolicy }}
+          args:
+            - --max_size={{ .Values.bazelRemote.maxSize }}
+            - --dir=/data
+            - --grpc_address=:{{ .Values.bazelRemote.service.grpcPort }}
+            - --http_address=:{{ .Values.bazelRemote.service.httpPort }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.bazelRemote.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.bazelRemote.service.httpPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.bazelRemote.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /data
+      volumes:
+        - name: cache
+          {{- if .Values.bazelRemote.storage.storageClass }}
+          persistentVolumeClaim:
+            claimName: {{ include "ferrisrbe.fullname" . }}-bazel-remote
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.bazelRemote.storage.size }}
+          {{- end }}
+{{- end }}

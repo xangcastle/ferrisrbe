@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rbe-server
+  namespace: rbe
+  labels:
+    app: rbe-server
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: rbe-server
+  template:
+    metadata:
+      labels:
+        app: rbe-server
+    spec:
+      containers:
+        - name: server
+          image: ferrisrbe/server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 9092
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: rbe-config
+          env:
+            # gRPC message size limit (bytes)
+            - name: RBE_MAX_GRPC_MSG_SIZE
+              value: "104857600"  # 100MB
+            # L1 Cache settings
+            - name: RBE_L1_CACHE_CAPACITY
+              value: "100000"  # Number of cached entries
+            - name: RBE_L1_CACHE_TTL_SECS
+              value: "3600"  # 1 hour TTL
+            # Output handler settings
+            - name: RBE_INLINE_OUTPUT_THRESHOLD
+              value: "1048576"  # 1MB
+            - name: RBE_MAX_CAPTURE_SIZE
+              value: "104857600"  # 100MB
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cas-storage
+              mountPath: /data/cas
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cas-storage
+          persistentVolumeClaim:
+            claimName: rbe-cas-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-server
+  namespace: rbe
+  labels:
+    app: rbe-server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9092
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  selector:
+    app: rbe-server
+---
+# External access via NodePort (more stable than port-forward)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-server-external
+  namespace: rbe
+  labels:
+    app: rbe-server
+spec:
+  type: NodePort
+  ports:
+    - port: 9092
+      targetPort: grpc
+      nodePort: 30092
+      protocol: TCP
+      name: grpc
+  selector:
+    app: rbe-server

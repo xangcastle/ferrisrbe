@@ -1,0 +1,19 @@
+# Railway deployment configuration
+# Deploy to Railway: https://railway.app/template
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "./rbe_server"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Required environment variables for Railway
+[deploy.env]
+RBE_PORT = "${PORT}"
+RBE_BIND_ADDRESS = "0.0.0.0"
+RUST_LOG = "info"

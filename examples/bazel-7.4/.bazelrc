@@ -1,0 +1,20 @@
+startup --host_jvm_args=-Xmx6g
+startup --host_jvm_args=-Xms2g
+startup --host_jvm_args=-XX:+UseG1GC
+startup --host_jvm_args=-XX:MaxGCPauseMillis=200
+
+build --symlink_prefix=/
+# ============================================
+# Remote Cache Configuration (NodePort)
+# ============================================
+build:remote-cache --remote_cache=grpc://localhost:30094
+build:remote-cache --remote_upload_local_results=true
+build:remote-cache --remote_timeout=300
+
+# ============================================
+# Remote Execution Configuration (NodePort)
+# ============================================
+build:remote-exec --config=remote-cache
+build:remote-exec --remote_executor=grpc://localhost:30092
+build:remote-exec --remote_default_exec_properties=OSFamily=linux
+build:remote-exec --remote_default_exec_properties=container-image=

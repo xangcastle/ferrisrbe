@@ -1,0 +1,36 @@
+startup --host_jvm_args=-Xmx6g
+startup --host_jvm_args=-Xms2g
+startup --host_jvm_args=-XX:+UseG1GC
+startup --host_jvm_args=-XX:MaxGCPauseMillis=200
+
+build --symlink_prefix=/
+
+# ============================================
+# Remote Cache (funciona desde cualquier SO)
+# ============================================
+build:remote-cache --remote_cache=grpc://localhost:30094
+build:remote-cache --remote_upload_local_results=true
+build:remote-cache --remote_timeout=600
+
+# ============================================
+# Remote Execution (requiere toolchains Linux)
+# ============================================
+build:remote-exec --config=remote-cache
+build:remote-exec --remote_executor=grpc://localhost:30092
+
+# Platform for remote execution
+build:remote-exec --extra_execution_platforms=//toolchains:linux_arm64
+build:remote-exec --platforms=//toolchains:linux_arm64
+
+# Register GCC toolchain
+build:remote-exec --extra_toolchains=//toolchains:gcc_linux_arm64_toolchain
+
+# Use GCC instead of Clang  
+build:remote-exec --repo_env=CC=gcc
+build:remote-exec --repo_env=CXX=g++
+
+# Disable module maps (Apple-specific)
+build:remote-exec --features=-module_maps
+
+# Jobs
+build:remote-exec --jobs=50

@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-config
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+data:
+  # Server settings
+  RBE_PORT: "9092"
+  
+  # gRPC settings
+  RBE_MAX_GRPC_MSG_SIZE: {{ .Values.config.maxGrpcMsgSize | quote }}
+  
+  # L1 Cache settings
+  RBE_L1_CACHE_CAPACITY: {{ .Values.config.l1CacheCapacity | quote }}
+  RBE_L1_CACHE_TTL_SECS: {{ .Values.config.l1CacheTtlSecs | quote }}
+  
+  # Output handler settings
+  RBE_INLINE_OUTPUT_THRESHOLD: {{ .Values.config.inlineOutputThreshold | quote }}
+  RBE_MAX_CAPTURE_SIZE: {{ .Values.config.maxCaptureSize | quote }}
+  
+  # Materializer settings
+  RBE_DOWNLOAD_TIMEOUT_SECS: {{ .Values.config.downloadTimeoutSecs | quote }}
+  RBE_MAX_CONCURRENT_DOWNLOADS: {{ .Values.config.maxConcurrentDownloads | quote }}
+  RBE_DOWNLOAD_CHUNK_SIZE: {{ .Values.config.downloadChunkSize | quote }}
+  RBE_STREAMING_THRESHOLD: {{ .Values.config.streamingThreshold | quote }}
+  RBE_MAX_BATCH_SIZE: {{ .Values.config.maxBatchSize | quote }}
+  RBE_USE_HARDLINKS: {{ .Values.config.useHardlinks | quote }}
+  RBE_VALIDATE_DIGESTS: {{ .Values.config.validateDigests | quote }}
+  
+  # Worker settings
+  MAX_CONCURRENT: {{ .Values.config.maxConcurrent | quote }}
+  
+  # =============================================================================
+  # HTTP/2 KEEPALIVE COORDINATION (CRITICAL)
+  # Server and worker must have coordinated keepalive settings to prevent
+  # HTTP/2 connection drops with "error reading a body from connection"
+  # RULE: Server interval >= Worker interval
+  # RULE: Server timeout >= Worker timeout
+  # =============================================================================
+  
+  # Server-side HTTP/2 keepalive (must be >= worker values)
+  RBE_TCP_KEEPALIVE_SECS: {{ .Values.config.server.tcpKeepaliveSecs | quote }}
+  RBE_HTTP2_KEEPALIVE_INTERVAL_SECS: {{ .Values.config.server.http2KeepaliveIntervalSecs | quote }}
+  RBE_HTTP2_KEEPALIVE_TIMEOUT_SECS: {{ .Values.config.server.http2KeepaliveTimeoutSecs | quote }}
+  RBE_REQUEST_TIMEOUT_SECS: {{ .Values.config.server.requestTimeoutSecs | quote }}
+  RBE_HTTP2_ADAPTIVE_WINDOW: {{ .Values.config.server.http2AdaptiveWindow | quote }}
+  
+  # Worker-side keepalive (must be <= server values)
+  RBE_KEEPALIVE_INTERVAL_SECS: {{ .Values.config.worker.keepaliveIntervalSecs | quote }}
+  RBE_MIN_KEEPALIVE_SECS: {{ .Values.config.worker.minKeepaliveSecs | quote }}
+  RBE_MAX_KEEPALIVE_SECS: {{ .Values.config.worker.maxKeepaliveSecs | quote }}
+  RBE_KEEPALIVE_TIMEOUT_SECS: {{ .Values.config.worker.keepaliveTimeoutSecs | quote }}
+  RBE_TCP_KEEPALIVE_SECS: {{ .Values.config.worker.tcpKeepaliveSecs | quote }}
+  RBE_CONNECTION_TIMEOUT_SECS: {{ .Values.config.worker.connectionTimeoutSecs | quote }}
+  RBE_MAX_RECONNECT_ATTEMPTS: {{ .Values.config.worker.maxReconnectAttempts | quote }}
+  RBE_RECONNECT_BASE_DELAY_MS: {{ .Values.config.worker.reconnectBaseDelayMs | quote }}
+  RBE_RECONNECT_MAX_DELAY_MS: {{ .Values.config.worker.reconnectMaxDelayMs | quote }}
+  RBE_HEALTH_CHECK_INTERVAL_SECS: {{ .Values.config.worker.healthCheckIntervalSecs | quote }}
+  RBE_HEALTH_CHECK_TIMEOUT_SECS: {{ .Values.config.worker.healthCheckTimeoutSecs | quote }}
+  RBE_EXECUTION_HANDOFF_TIMEOUT_SECS: {{ .Values.config.worker.executionHandoffTimeoutSecs | quote }}
+  RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD: {{ .Values.config.worker.adaptiveAdjustmentThreshold | quote }}
+  RBE_ENABLE_METRICS: {{ .Values.config.worker.enableMetrics | quote }}
+  
+  # Logging
+  RUST_LOG: {{ .Values.config.rustLog | quote }}
+  
+  # Endpoints
+  SERVER_ENDPOINT: "http://{{ include "ferrisrbe.fullname" . }}-server:9092"
+  CAS_ENDPOINT: "http://{{ include "ferrisrbe.fullname" . }}-bazel-remote:9094"

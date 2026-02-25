@@ -1,0 +1,5 @@
+genrule(
+    name = "hello_rbe",
+    outs = ["hello.txt"],
+    cmd = "echo 'Hello from remote execution!' > $@",
+)

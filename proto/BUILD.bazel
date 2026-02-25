@@ -1,0 +1,19 @@
+"""Build file para archivos de Protocol Buffers.
+
+Este archivo exporta los archivos .proto para que puedan ser usados
+por el cargo_build_script en el BUILD.bazel raíz.
+"""
+
+# Exportar todos los archivos proto para que puedan ser referenciados
+# desde el cargo_build_script
+exports_files(
+    glob(["**/*.proto"]),
+    visibility = ["//visibility:public"],
+)
+
+# Filegroup con todos los archivos proto
+filegroup(
+    name = "all_protos",
+    srcs = glob(["**/*.proto"]),
+    visibility = ["//visibility:public"],
+)

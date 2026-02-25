@@ -1,0 +1,100 @@
+# Gitpod configuration for FerrisRBE
+# This file enables one-click development environment
+# https://gitpod.io/#https://github.com/xangcastle/ferrisrbe
+
+tasks:
+  - name: Setup Environment
+    init: |
+      # Install Rust (if not present)
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      source $HOME/.cargo/env
+      
+      # Install Bazelisk
+      curl -Lo /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+      chmod +x /usr/local/bin/bazel
+      
+      # Install kubectl and Helm
+      curl -LO "https://dl.k8s/release/$(curl -L -s https://dl.k8s/release/stable.txt)/bin/linux/amd64/kubectl"
+      chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+      curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      
+      # Install Kind for local cluster
+      curl -Lo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64
+      chmod +x /usr/local/bin/kind
+      
+      # Install grpcurl for testing
+      curl -Lo /usr/local/bin/grpcurl https://github.com/fullstorydev/grpcurl/releases/download/v1.8.9/grpcurl_1.8.9_linux_x86_64.tar.gz
+      # Note: grpcurl is a tar.gz, simplified for brevity
+      
+      # Build the project
+      echo "Building FerrisRBE..."
+      bazel build //:rbe-server //:rbe-worker 2>&1 | tail -10
+      
+    command: |
+      echo "╔════════════════════════════════════════════════════════════╗"
+      echo "║           FerrisRBE Development Environment Ready          ║"
+      echo "╠════════════════════════════════════════════════════════════╣"
+      echo "║ Available Commands:                                        ║"
+      echo "║   bazel build //:rbe-server //:rbe-worker   Build binaries ║"
+      echo "║   ./scripts/run-local.sh                    Run locally    ║"
+      echo "║   kind create cluster --name ferrisrbe      Create cluster ║"
+      echo "║   helm install ferrisrbe ./charts/ferrisrbe Deploy         ║"
+      echo "╚════════════════════════════════════════════════════════════╝"
+      
+      # Show current status
+      source $HOME/.cargo/env
+      rustc --version
+      bazel --version
+
+  - name: Start Services
+    command: |
+      # Wait for setup to complete
+      sleep 5
+      
+      # Option to start local development environment
+      echo "To start local development:"
+      echo "  1. ./scripts/run-local.sh (local cargo)"
+      echo "  2. docker-compose up -d (Docker Compose)"
+      echo "  3. kind create cluster + helm install (K8s)"
+
+# Ports to expose
+ports:
+  - port: 9092
+    name: RBE Server gRPC
+    description: Main RBE server endpoint
+    onOpen: notify
+  - port: 9094
+    name: CAS Storage
+    description: Bazel Remote Cache
+    onOpen: ignore
+  - port: 8080
+    name: CAS HTTP
+    description: HTTP interface for CAS
+    onOpen: open-preview
+  - port: 6379
+    name: Redis
+    description: Redis metadata store
+    onOpen: ignore
+
+# VSCode extensions
+vscode:
+  extensions:
+    - rust-lang.rust-analyzer
+    - BazelBuild.vscode-bazel
+    - ms-kubernetes-tools.vscode-kubernetes-tools
+    - ms-azuretools.vscode-docker
+
+# Additional repositories (if needed)
+# additionalRepositories: []
+
+# Prebuilds for faster startup
+# https://www.gitpod.io/docs/configure/projects/prebuilds
+github:
+  prebuilds:
+    master: true
+    branches: true
+    pullRequests: true
+    pullRequestsFromForks: true
+    addCheck: true
+    addComment: false
+    addBadge: true

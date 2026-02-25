@@ -1,0 +1,9 @@
+"""Módulo Bazel para testing con versión 9.x"""
+
+module(
+    name = "bazel_9x_test",
+    version = "1.0.0",
+    compatibility_level = 1,
+)
+
+# No dependencies needed for genrule tests

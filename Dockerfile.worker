@@ -1,0 +1,59 @@
+# FerrisRBE Worker - Imagen con herramientas nativas de Linux
+# Esta imagen incluye las herramientas necesarias para ejecutar acciones de Bazel
+# sin depender de toolchains externas (evita "Exec format error")
+
+FROM debian:bookworm-slim
+
+# Instalar herramientas esenciales que Bazel espera encontrar
+RUN apt-get update && apt-get install -y \
+    # Herramientas básicas de shell
+    bash \
+    coreutils \
+    # Compresión/archivado
+    tar \
+    gzip \
+    bzip2 \
+    xz-utils \
+    zip \
+    unzip \
+    # Utilidades de red
+    curl \
+    wget \
+    ca-certificates \
+    # Control de versiones
+    git \
+    # Otras herramientas comunes en builds
+    grep \
+    sed \
+    gawk \
+    diffutils \
+    patch \
+    make \
+    python3 \
+    python3-pip \
+    nodejs \
+    npm \
+    # Limpieza
+    && rm -rf /var/lib/apt/lists/*
+
+# Crear symlinks para compatibilidad con toolchains de Bazel
+# Bazel busca "tar" y "coreutils" en rutas específicas
+RUN mkdir -p /usr/local/bin/toolchains && \
+    ln -sf /bin/tar /usr/local/bin/toolchains/tar && \
+    ln -sf /usr/bin/tar /usr/local/bin/toolchains/bsd_tar && \
+    ln -sf /bin/cp /usr/local/bin/toolchains/cp && \
+    ln -sf /bin/mv /usr/local/bin/toolchains/mv && \
+    ln -sf /bin/rm /usr/local/bin/toolchains/rm && \
+    ln -sf /bin/mkdir /usr/local/bin/toolchains/mkdir && \
+    ln -sf /bin/cat /usr/local/bin/toolchains/cat && \
+    ln -sf /bin/sort /usr/local/bin/toolchains/sort && \
+    ln -sf /bin/cut /usr/local/bin/toolchains/cut && \
+    ln -sf /bin/join /usr/local/bin/toolchains/join && \
+    ln -sf /bin/grep /usr/local/bin/toolchains/grep
+
+# Directorio de trabajo
+WORKDIR /workspace
+
+# El binario del worker se copiará desde Bazel
+# Este entrypoint será sobrescrito por la configuración de K8s
+ENTRYPOINT ["/app/rbe-worker"]

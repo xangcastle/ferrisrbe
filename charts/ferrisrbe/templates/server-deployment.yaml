@@ -1,0 +1,78 @@
+{{- if .Values.server.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-server
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: server
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: server
+      {{- include "ferrisrbe.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: server
+        {{- include "ferrisrbe.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ferrisrbe.serviceAccountName" . }}
+      containers:
+        - name: server
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: 9092
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ferrisrbe.fullname" . }}-config
+          env:
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          {{- if .Values.server.livenessProbe.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: {{ .Values.server.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.server.livenessProbe.periodSeconds }}
+          {{- end }}
+          {{- if .Values.server.readinessProbe.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: {{ .Values.server.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.server.readinessProbe.periodSeconds }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cas-storage
+              mountPath: /data/cas
+          securityContext:
+            {{- toYaml .Values.server.securityContext | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cas-storage
+          emptyDir:
+            sizeLimit: {{ .Values.bazelRemote.storage.size }}
+      nodeSelector:
+        {{- toYaml .Values.server.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.server.tolerations | nindent 8 }}
+      affinity:
+        {{- toYaml .Values.server.affinity | nindent 8 }}
+{{- end }}

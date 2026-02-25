@@ -1,0 +1,23 @@
+{{- if .Values.server.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-server
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: server
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - port: 9092
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+      {{- if and (eq .Values.server.service.type "NodePort") .Values.server.service.nodePort }}
+      nodePort: {{ .Values.server.service.nodePort }}
+      {{- end }}
+  selector:
+    app.kubernetes.io/component: server
+    {{- include "ferrisrbe.selectorLabels" . | nindent 4 }}
+{{- end }}

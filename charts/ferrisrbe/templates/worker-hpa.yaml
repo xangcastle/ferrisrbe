@@ -1,0 +1,47 @@
+{{- if and .Values.worker.enabled .Values.worker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-worker
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: worker
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "ferrisrbe.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.worker.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.worker.autoscaling.scaleUpStabilizationWindow | default 0 }}
+      policies:
+        - type: Pods
+          value: {{ .Values.worker.autoscaling.scaleUpPods | default 2 }}
+          periodSeconds: {{ .Values.worker.autoscaling.scaleUpPeriod | default 15 }}
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.worker.autoscaling.scaleDownStabilizationWindow | default 300 }}
+      policies:
+        - type: Pods
+          value: {{ .Values.worker.autoscaling.scaleDownPods | default 1 }}
+          periodSeconds: {{ .Values.worker.autoscaling.scaleDownPeriod | default 60 }}
+{{- end }}

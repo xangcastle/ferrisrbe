@@ -1,0 +1,15 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ferrisrbe
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30092
+        hostPort: 30092
+        listenAddress: "0.0.0.0"
+      - containerPort: 30094
+        hostPort: 30094
+        listenAddress: "0.0.0.0"
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: "0.0.0.0"

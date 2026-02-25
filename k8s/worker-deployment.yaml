@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rbe-worker
+  namespace: rbe
+  labels:
+    app: rbe-worker
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: rbe-worker
+  template:
+    metadata:
+      labels:
+        app: rbe-worker
+    spec:
+      containers:
+        - name: worker
+          image: ferrisrbe/worker:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: rbe-config
+          env:
+            # Per-pod configuration (from downward API)
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Service endpoints (override ConfigMap defaults if needed)
+            - name: SERVER_ENDPOINT
+              value: "http://rbe-server:9092"
+            - name: CAS_ENDPOINT
+              value: "http://bazel-remote:9094"
+            # Worker-specific settings
+            - name: WORKER_TYPE
+              value: "default"
+            - name: WORKER_LABELS
+              value: "os=linux,arch=amd64"
+            - name: MAX_CONCURRENT
+              value: "4"
+            - name: WORKDIR
+              value: "/workspace"
+            - name: RUST_LOG
+              value: "info"
+            # Materializer settings (O(1) memory streaming for large files)
+            - name: RBE_DOWNLOAD_TIMEOUT_SECS
+              value: "300"  # 5 minutes max per file download
+            - name: RBE_MAX_CONCURRENT_DOWNLOADS
+              value: "10"
+            - name: RBE_DOWNLOAD_CHUNK_SIZE
+              value: "65536"  # 64KB chunks
+            - name: RBE_USE_HARDLINKS
+              value: "true"
+            - name: RBE_VALIDATE_DIGESTS
+              value: "true"
+            # gRPC message size limit (bytes)
+            - name: RBE_MAX_GRPC_MSG_SIZE
+              value: "104857600"  # 100MB
+            # Output handler settings
+            - name: RBE_INLINE_OUTPUT_THRESHOLD
+              value: "1048576"  # 1MB - outputs smaller than this are sent inline
+            - name: RBE_MAX_CAPTURE_SIZE
+              value: "104857600"  # 100MB - max output size before truncation
+            # Batch upload settings
+            - name: RBE_MAX_BATCH_SIZE
+              value: "4194304"  # 4MB - threshold for streaming uploads
+            # Materializer streaming threshold
+            - name: RBE_STREAMING_THRESHOLD
+              value: "4194304"  # 4MB - threshold for streaming downloads
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          # Liveness probe removed - using resilient connection management instead
+          # The worker has built-in health checking and automatic reconnection
+          volumeMounts:
+            - name: workdir
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workdir
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: tmp
+          emptyDir: {}
+---
+# Horizontal Pod Autoscaler for Workers
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rbe-worker
+  namespace: rbe
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rbe-worker
+  minReplicas: 5
+  maxReplicas: 100
+  metrics:
+    # Scale based on CPU
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Scale based on memory
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60

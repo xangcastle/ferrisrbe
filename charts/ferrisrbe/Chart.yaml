@@ -1,0 +1,20 @@
+apiVersion: v2
+name: ferrisrbe
+description: FerrisRBE - Remote Build Execution for Bazel
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - bazel
+  - remote-execution
+  - build-cache
+  - rbe
+home: https://github.com/xangcastle/ferrisrbe
+sources:
+  - https://github.com/xangcastle/ferrisrbe
+maintainers:
+  - name: abel
+    email: abel@example.com
+icon: https://raw.githubusercontent.com/xangcastle/ferrisrbe/main/docs/assets/logo.png
+annotations:
+  category: DeveloperTools

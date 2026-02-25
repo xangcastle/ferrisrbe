@@ -1,0 +1,132 @@
+"""Build file con genrules de prueba para Bazel 9.x
+
+Este archivo define:
+1. Una genrule cacheable (genera output determinístico)
+2. Una genrule no cacheable (usa timestamp/no-cache tag)
+3. Una dependencia entre ellas para probar el grafo de build
+
+Bazel 9.x requiere REAPI v2.4+ y puede soportar extensiones futuras.
+"""
+
+# Genrule cacheable: Genera un archivo con contenido determinístico
+# Esta regla debería ser cacheada después de la primera ejecución
+genrule(
+    name = "cacheable_step",
+    srcs = [],
+    outs = ["cacheable_output.txt"],
+    cmd = """
+        echo "=== Bazel 9.x Cacheable Step ===" > $@
+        echo "Generated at build time (should be cached)" >> $@
+        echo "Deterministic content: Hello from Bazel 9.x" >> $@
+        echo "REAPI Version Required: v2.4+" >> $@
+        echo "Timestamp (for reference only): $$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $@
+    """,
+    tags = [
+        "cacheable",
+        "remote-cacheable",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Genrule no cacheable: Genera output con timestamp único
+# Esta regla NUNCA debería ser cacheada debido a el tag "no-cache"
+genrule(
+    name = "non_cacheable_step",
+    srcs = [":cacheable_step"],
+    outs = ["non_cacheable_output.txt"],
+    cmd = """
+        echo "=== Bazel 9.x Non-Cacheable Step ===" > $@
+        echo "This step depends on cacheable_step" >> $@
+        echo "" >> $@
+        echo "Input from cacheable step:" >> $@
+        cat $(location :cacheable_step) >> $@
+        echo "" >> $@
+        echo "Non-cacheable content (unique per run): $$(date +%s.%N)" >> $@
+        echo "Random: $$(cat /dev/urandom | head -c 8 | xxd -p)" >> $@
+    """,
+    tags = [
+        "no-cache",
+        "no-remote-cache",
+        "local",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Target final que agrupa ambos pasos
+filegroup(
+    name = "all_outputs",
+    srcs = [
+        ":cacheable_step",
+        ":non_cacheable_step",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Target de convenio para testing rápido
+genrule(
+    name = "test_summary",
+    srcs = [":non_cacheable_step"],
+    outs = ["test_summary.txt"],
+    cmd = """
+        echo "========================================" > $@
+        echo "     Bazel 9.x Remote Execution Test" >> $@
+        echo "========================================" >> $@
+        echo "" >> $@
+        echo "Build Summary:" >> $@
+        echo "- Cacheable step: //:cacheable_step" >> $@
+        echo "- Non-cacheable step: //:non_cacheable_step" >> $@
+        echo "- REAPI Required: v2.4+" >> $@
+        echo "" >> $@
+        echo "Output:" >> $@
+        cat $(location :non_cacheable_step) >> $@
+        echo "" >> $@
+        echo "========================================" >> $@
+    """,
+    visibility = ["//visibility:public"],
+)
+
+# Target adicional para verificar compatibilidad REAPI v2.4+
+genrule(
+    name = "reapi_check",
+    srcs = [],
+    outs = ["reapi_version.txt"],
+    cmd = """
+        echo "REAPI v2.4+ Compatibility Check" > $@
+        echo "" >> $@
+        echo "Required fields:" >> $@
+        echo "  - deprecated_api_version (field 3)" >> $@
+        echo "  - low_api_version (field 4)" >> $@
+        echo "  - high_api_version (field 5)" >> $@
+        echo "" >> $@
+        echo "Optional fields (Bazel 9.x may use):" >> $@
+        echo "  - CacheCapabilities extended fields" >> $@
+        echo "  - zstd compression support" >> $@
+        echo "  - symlink_absolute_path_strategy" >> $@
+        echo "" >> $@
+        echo "Bazel 9.x is forward-compatible with future REAPI versions." >> $@
+    """,
+    visibility = ["//visibility:public"],
+)
+
+# Target para probar múltiples dependencias
+genrule(
+    name = "multi_dependency_test",
+    srcs = [
+        ":cacheable_step",
+        ":reapi_check",
+    ],
+    outs = ["multi_dependency_output.txt"],
+    cmd = """
+        echo "=== Multi-Dependency Test ===" > $@
+        echo "This target depends on multiple cacheable steps" >> $@
+        echo "" >> $@
+        echo "Input 1 (cacheable_step):" >> $@
+        cat $(location :cacheable_step) >> $@
+        echo "" >> $@
+        echo "Input 2 (reapi_check):" >> $@
+        cat $(location :reapi_check) >> $@
+        echo "" >> $@
+        echo "Build completed successfully!" >> $@
+    """,
+    visibility = ["//visibility:public"],
+)

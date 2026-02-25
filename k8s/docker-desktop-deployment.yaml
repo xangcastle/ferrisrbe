@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rbe
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rbe-server
+  namespace: rbe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rbe-server
+  template:
+    metadata:
+      labels:
+        app: rbe-server
+    spec:
+      containers:
+        - name: server
+          image: rbe-server:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9092
+          env:
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-server
+  namespace: rbe
+spec:
+  type: NodePort
+  ports:
+    - port: 9092
+      targetPort: 9092
+      nodePort: 30092
+  selector:
+    app: rbe-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rbe-worker
+  namespace: rbe
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rbe-worker
+  template:
+    metadata:
+      labels:
+        app: rbe-worker
+    spec:
+      containers:
+        - name: worker
+          image: rbe-worker:latest
+          imagePullPolicy: Never
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: SERVER_ENDPOINT
+              value: "http://rbe-server:9092"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-worker
+  namespace: rbe
+spec:
+  ports:
+    - port: 9093
+  selector:
+    app: rbe-worker
+---
+# bazel-remote fix: disable service links to avoid env var injection
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bazel-remote
+  namespace: rbe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bazel-remote
+  template:
+    metadata:
+      labels:
+        app: bazel-remote
+    spec:
+      enableServiceLinks: false  # Disable K8s service env injection
+      containers:
+        - name: bazel-remote
+          image: buchgr/bazel-remote-cache:latest
+          args:
+            - --dir=/data
+            - --max_size=10
+            - --grpc_address=:9094
+            - --http_address=:8080
+          ports:
+            - containerPort: 9094
+              name: grpc
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bazel-remote
+  namespace: rbe
+spec:
+  ports:
+    - port: 9094
+      targetPort: 9094
+      name: grpc
+    - port: 8080
+      targetPort: 8080
+      name: http
+  selector:
+    app: bazel-remote
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: rbe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: rbe
+spec:
+  ports:
+    - port: 6379
+  selector:
+    app: redis

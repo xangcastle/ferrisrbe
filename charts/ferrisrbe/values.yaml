@@ -1,0 +1,239 @@
+# Default values for FerrisRBE
+# This is a YAML-formatted file.
+
+# Global settings
+nameOverride: ""
+fullnameOverride: ""
+
+# Namespace (optional, defaults to Release.Namespace)
+namespace: ""
+
+# Server configuration
+server:
+  enabled: true
+  replicaCount: 1
+  
+  image:
+    repository: xangcastle/ferris-server
+    tag: latest
+    # Use "IfNotPresent" for production (default)
+    # Use "Never" only for local development with Kind
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 9092
+    nodePort: 30092
+    annotations: {}
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  
+  # Liveness and readiness probes
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  
+  # Pod security context
+  securityContext: {}
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity
+  affinity: {}
+  
+  # Additional environment variables
+  extraEnv: []
+
+# Worker configuration
+worker:
+  enabled: true
+  replicaCount: 2
+  
+  image:
+    repository: xangcastle/ferris-worker
+    tag: latest
+    # Use "IfNotPresent" for production (default)
+    # Use "Never" only for local development with Kind
+    pullPolicy: IfNotPresent
+  
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Liveness and readiness probes
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 30
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  
+  # Empty dir size for workspace
+  workspace:
+    sizeLimit: 10Gi
+  
+  # Security context
+  securityContext: {}
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity
+  affinity: {}
+  
+  # Additional environment variables
+  extraEnv: []
+
+# Bazel Remote Cache (CAS) configuration
+bazelRemote:
+  enabled: true
+  
+  image:
+    repository: buchgr/bazel-remote-cache
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  # Storage configuration
+  storage:
+    size: 200Gi
+    storageClass: ""
+  
+  # Maximum cache size in MB
+  maxSize: 10000
+  
+  service:
+    grpcPort: 9094
+    httpPort: 8080
+    nodePortGrpc: 30094
+    nodePortHttp: 30080
+  
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 8Gi
+    requests:
+      cpu: 500m
+      memory: 2Gi
+
+# Redis configuration (for metadata)
+redis:
+  enabled: true
+  
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# FerrisRBE Configuration (12-Factor App)
+config:
+  # gRPC message size limit (bytes)
+  maxGrpcMsgSize: 104857600  # 100MB
+  
+  # L1 Cache settings
+  l1CacheCapacity: 100000
+  l1CacheTtlSecs: 3600  # 1 hour
+  
+  # Output handler settings
+  inlineOutputThreshold: 1048576  # 1MB
+  maxCaptureSize: 104857600  # 100MB
+  
+  # Worker materializer settings
+  downloadTimeoutSecs: 300  # 5 minutes
+  maxConcurrentDownloads: 10
+  downloadChunkSize: 65536  # 64KB
+  streamingThreshold: 4194304  # 4MB
+  maxBatchSize: 4194304  # 4MB
+  useHardlinks: "true"
+  validateDigests: "true"
+  
+  # =============================================================================
+  # HTTP/2 KEEPALIVE COORDINATION (CRITICAL)
+  # Server and worker must have coordinated keepalive settings to prevent
+  # HTTP/2 connection drops with "error reading a body from connection"
+  # 
+  # RULE: Server interval >= Worker interval (server waits longer than worker)
+  # RULE: Server timeout >= Worker timeout
+  # 
+  # If you change worker values, you MUST also change server values to match.
+  # =============================================================================
+  
+  # Server-side HTTP/2 settings (must be >= worker values)
+  server:
+    tcpKeepaliveSecs: 30                   # TCP keepalive probe interval
+    http2KeepaliveIntervalSecs: 20         # HTTP/2 PING interval (match worker)
+    http2KeepaliveTimeoutSecs: 15          # HTTP/2 PING ACK timeout (match worker)
+    requestTimeoutSecs: 600                # Request timeout (0 = disabled)
+    http2AdaptiveWindow: "true"            # Enable adaptive flow control
+  
+  # Worker-side keepalive settings (must be <= server values)
+  worker:
+    maxConcurrent: 4
+    keepaliveIntervalSecs: 20              # Interval between HTTP/2 pings
+    minKeepaliveSecs: 10                   # Minimum allowed keepalive interval
+    maxKeepaliveSecs: 60                   # Maximum allowed keepalive interval
+    keepaliveTimeoutSecs: 15               # Timeout for keepalive responses
+    tcpKeepaliveSecs: 30                   # TCP keepalive (should match server)
+    connectionTimeoutSecs: 30              # TCP connection timeout
+    maxReconnectAttempts: 10               # Max reconnection attempts
+    reconnectBaseDelayMs: 100              # Base delay for exponential backoff
+    reconnectMaxDelayMs: 30000             # Max delay for exponential backoff
+    healthCheckIntervalSecs: 5             # Health check frequency
+    healthCheckTimeoutSecs: 3              # Health check timeout
+    executionHandoffTimeoutSecs: 60        # Handoff timeout during reconnection
+    adaptiveAdjustmentThreshold: 3         # Threshold for adaptive adjustment
+    enableMetrics: "true"                  # Enable connection metrics
+  
+  # Logging
+  rustLog: "info"
+
+# Service account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# RBAC
+rbac:
+  create: true

@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rbe-config
+  namespace: rbe
+data:
+  # RBE Server configuration
+  RBE_PORT: "9092"
+  RBE_LOG_LEVEL: "info"
+  RBE_WORKER_SERVICE: "rbe-worker:9093"
+  
+  # CAS (Content Addressable Storage)
+  CAS_ENDPOINT: "bazel-remote:9094"
+  CAS_MAX_BATCH_SIZE: "4194304"
+  
+  # Action Cache
+  CACHE_TYPE: "redis"
+  REDIS_ENDPOINT: "redis:6379"
+  
+  # Worker defaults
+  WORKER_TYPE: "default"
+  WORKER_MAX_CONCURRENT: "4"
+  
+  # =============================================================================
+  # HTTP/2 KEEPALIVE COORDINATION (CRITICAL)
+  # Server and worker must have coordinated keepalive settings to prevent
+  # HTTP/2 connection drops with "error reading a body from connection"
+  # 
+  # RULE: Server interval >= Worker interval (server waits longer than worker)
+  # RULE: Server timeout >= Worker timeout
+  # =============================================================================
+  
+  # Server-side HTTP/2 keepalive (must be >= worker values)
+  RBE_TCP_KEEPALIVE_SECS: "30"                   # TCP keepalive probes
+  RBE_HTTP2_KEEPALIVE_INTERVAL_SECS: "20"        # HTTP/2 PING interval (match worker)
+  RBE_HTTP2_KEEPALIVE_TIMEOUT_SECS: "15"         # HTTP/2 PING ACK timeout (match worker)
+  RBE_REQUEST_TIMEOUT_SECS: "600"                # Request timeout (0 = disabled)
+  RBE_HTTP2_ADAPTIVE_WINDOW: "true"              # Enable adaptive flow control
+  
+  # Worker-side keepalive (must be <= server values)
+  RBE_KEEPALIVE_INTERVAL_SECS: "20"              # Interval between HTTP/2 pings
+  RBE_MIN_KEEPALIVE_SECS: "10"                   # Minimum allowed keepalive interval
+  RBE_MAX_KEEPALIVE_SECS: "60"                   # Maximum allowed keepalive interval
+  RBE_KEEPALIVE_TIMEOUT_SECS: "15"               # Timeout for keepalive responses
+  
+  # Connection settings
+  RBE_CONNECTION_TIMEOUT_SECS: "30"              # TCP connection timeout
+  RBE_MAX_RECONNECT_ATTEMPTS: "10"               # Max reconnection attempts
+  RBE_RECONNECT_BASE_DELAY_MS: "100"             # Base delay for exponential backoff
+  RBE_RECONNECT_MAX_DELAY_MS: "30000"            # Max delay for exponential backoff
+  RBE_RECONNECT_JITTER_FACTOR: "0.25"            # Jitter factor (0.0-1.0)
+  
+  # Health check settings
+  RBE_HEALTH_CHECK_INTERVAL_SECS: "5"            # Health check frequency
+  RBE_HEALTH_CHECK_TIMEOUT_SECS: "3"             # Health check timeout
+  RBE_EXECUTION_HANDOFF_TIMEOUT_SECS: "60"       # Handoff timeout during reconnection
+  
+  # Adaptive keepalive settings
+  RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD: "3"         # Threshold for adaptive adjustment
+  RBE_ENABLE_METRICS: "true"                     # Enable connection metrics
+  
+  # Platform configuration
+  DEFAULT_PLATFORM_OS: "linux"
+  DEFAULT_PLATFORM_ARCH: "arm64"

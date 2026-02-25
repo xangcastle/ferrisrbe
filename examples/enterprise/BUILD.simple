@@ -1,0 +1,6 @@
+genrule(
+    name = "simple_test",
+    outs = ["output.txt"],
+    cmd = "echo 'Hello from remote' > $@",
+    tags = ["no-remote-cache"],
+)

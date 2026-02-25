@@ -1,0 +1,3 @@
+build --remote_cache=grpc://localhost:30094
+build --remote_upload_local_results=true
+build --jobs=8

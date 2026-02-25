@@ -1,0 +1,17 @@
+# Global owners
+* @xangcastle
+
+# Rust source code
+/src/ @xangcastle
+
+# Documentation
+/docs/ @xangcastle
+
+# CI/CD configuration
+/.github/ @xangcastle
+
+# Helm charts
+/charts/ @xangcastle
+
+# Kubernetes manifests
+/k8s/ @xangcastle

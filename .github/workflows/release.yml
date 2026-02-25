@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Mount Bazel cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-
+
+      - name: Build and push server image
+        run: |
+          bazel run //oci:server_load
+          docker tag ferrisrbe/server:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server:${{ github.ref_name }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server:${{ github.ref_name }}
+
+      - name: Build and push worker image
+        run: |
+          bazel run //oci:worker_load
+          docker tag ferrisrbe/worker:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ github.ref_name }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ github.ref_name }}
+
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
