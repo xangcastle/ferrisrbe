@@ -1,7 +1,7 @@
 # Contenedor Ubuntu para probar Remote Execution desde Linux
 # Este contenedor tiene Bazel y acceso al código para verificar que RE funciona
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # Evitar prompts interactivos
 ENV DEBIAN_FRONTEND=noninteractive
