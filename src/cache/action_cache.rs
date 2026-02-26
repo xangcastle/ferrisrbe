@@ -1,5 +1,3 @@
-
-
 use crate::types::{AtomicInstant, DigestInfo, Result, DASHMAP_SHARD_COUNT};
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -161,39 +159,44 @@ impl L1ActionCache {
 
         let mut heap = self.expiration_heap.lock();
         heap.push(Reverse(ExpirationEntry { expires_at, digest }));
-        
+
         let heap_len = heap.len();
         let should_prune = heap_len > self.max_capacity * 2;
         drop(heap);
-        
+
         if should_prune {
-            debug!("Expiration heap has {} entries (capacity {}), pruning ghosts", 
-                   heap_len, self.max_capacity);
+            debug!(
+                "Expiration heap has {} entries (capacity {}), pruning ghosts",
+                heap_len, self.max_capacity
+            );
             self.cleanup_expired();
-            
+
             self.prune_ghost_entries();
         }
 
         debug!("L1 cache insert for digest: {:?}", digest);
     }
-    
+
     /// Prune "ghost" entries from expiration heap (entries not in cache anymore)
     /// This prevents memory leak when LRU evicts but heap still references them.
     /// Prune "ghost" entries from expiration heap (entries not in cache anymore).
     fn prune_ghost_entries(&self) {
         let mut heap = self.expiration_heap.lock();
-        
+
         let mut vec = std::mem::take(&mut *heap).into_vec();
         let original_len = vec.len();
-        
+
         vec.retain(|Reverse(entry)| self.cache.contains_key(&entry.digest));
-        
+
         let pruned = original_len - vec.len();
-        
+
         *heap = BinaryHeap::from(vec);
-        
+
         if pruned > 0 {
-            warn!("Pruned {} ghost entries from expiration heap in O(N)", pruned);
+            warn!(
+                "Pruned {} ghost entries from expiration heap in O(N)",
+                pruned
+            );
         }
     }
 
@@ -265,12 +268,12 @@ impl L1ActionCache {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(100_000);
-        
+
         let ttl_secs = std::env::var(ENV_L1_CACHE_TTL_SECS)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3600);
-        
+
         Self::new(capacity, Duration::from_secs(ttl_secs))
     }
 }
@@ -285,7 +288,6 @@ pub trait L2Store: Send + Sync {
 #[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait CasStore: Send + Sync {
-
     async fn exists(&self, digest: &DigestInfo) -> Result<bool>;
 
     async fn validate_references(&self, result: &ActionResult) -> Result<bool>;
@@ -297,7 +299,6 @@ where
     L2: L2Store,
     CAS: CasStore,
 {
-
     l1_cache: Arc<L1ActionCache>,
 
     l2_store: Arc<L2>,
@@ -332,16 +333,13 @@ where
 
     #[allow(dead_code)]
     pub async fn get(&self, digest: &DigestInfo) -> Result<Option<ActionResult>> {
-
         if let Some(result) = self.l1_cache.get(digest) {
-
             self.enqueue_validation(*digest);
             return Ok(Some(result));
         }
 
         match self.l2_store.get(digest).await? {
             Some(result) => {
-
                 self.l1_cache.put(*digest, result.clone());
                 Ok(Some(result))
             }
@@ -351,7 +349,6 @@ where
 
     #[allow(dead_code)]
     pub async fn put(&self, digest: &DigestInfo, result: &ActionResult) -> Result<()> {
-
         self.l2_store.put(digest, result).await?;
 
         self.l1_cache.put(*digest, result.clone());
@@ -382,9 +379,7 @@ where
             };
 
             if let Some(digest) = digest {
-
                 if let Some(result) = l1.get(&digest) {
-
                     match cas.validate_references(&result).await {
                         Ok(true) => {
                             debug!("Validation passed for {:?}", digest);

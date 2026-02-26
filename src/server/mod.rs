@@ -1,5 +1,3 @@
-
-
 pub mod action_cache_service;
 pub mod byte_stream;
 pub mod capabilities_service;
@@ -13,9 +11,9 @@ use tonic::transport::Server;
 use tracing::info;
 
 use crate::cache::action_cache::L1ActionCache;
-use crate::cas::backends::GrpcCasBackend;
 #[allow(unused_imports)]
 use crate::cas::backends::DiskBackend;
+use crate::cas::backends::GrpcCasBackend;
 use crate::cas::SharedCasBackend;
 use crate::execution::engine::ExecutionEngine;
 use crate::execution::results::ResultsStore;
@@ -62,13 +60,11 @@ pub struct RbeServer {
 
 impl RbeServer {
     pub async fn new(config: RbeServerConfig) -> Result<Self, Box<dyn std::error::Error>> {
-        let cas_endpoint = std::env::var("CAS_ENDPOINT")
-            .unwrap_or_else(|_| "bazel-remote:9094".to_string());
-        
+        let cas_endpoint =
+            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "bazel-remote:9094".to_string());
+
         info!("Initializing gRPC CAS backend: endpoint={}", cas_endpoint);
-        let cas_backend: SharedCasBackend = Arc::new(
-            GrpcCasBackend::new(&cas_endpoint).await?
-        );
+        let cas_backend: SharedCasBackend = Arc::new(GrpcCasBackend::new(&cas_endpoint).await?);
         info!("CAS backend initialized successfully");
 
         let l1_cache = Arc::new(L1ActionCache::new(
@@ -160,11 +156,11 @@ impl RbeServer {
             .ok()
             .map(|s| s == "true" || s == "1")
             .unwrap_or(true);
-        
+
         info!("HTTP/2 Configuration: tcp_keepalive={}s, http2_interval={}s, http2_timeout={}s, request_timeout={}s, adaptive_window={}",
-              tcp_keepalive_secs, http2_keepalive_interval_secs, http2_keepalive_timeout_secs, 
+              tcp_keepalive_secs, http2_keepalive_interval_secs, http2_keepalive_timeout_secs,
               request_timeout_secs, http2_adaptive_window);
-        
+
         Server::builder()
             .tcp_keepalive(Some(Duration::from_secs(tcp_keepalive_secs)))
             .tcp_nodelay(true)
