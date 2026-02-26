@@ -30,21 +30,24 @@ Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ m
 
 ## 🚀 Quick Start
 
-### Option 1: Railway (Easiest - Remote Cache)
+### Option 1: Railway (Easiest - Full RBE)
 
-Deploy a managed Remote Cache instance with one click. Free tier available.
+Deploy complete Remote Build Execution infrastructure with one click:
+- **RBE Server** - gRPC API for cache and execution  
+- **bazel-remote** - CAS (Content Addressable Storage)
+- **Redis** - Metadata store
+- **Workers** - Build executors
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/mhjSM1?referralCode=yQR-JU)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/rxPtfg?referralCode=yQR-JU&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 ```bash
-# Or use CLI
-railway service create ferrisrbe-cache --source .
-
-# Configure Bazel with your Railway URL
+# Get your Railway server URL from the dashboard
+# Configure Bazel:
+echo 'build:remote --remote_executor=grpc://<your-railway-url>' >> ~/.bazelrc
 echo 'build:remote --remote_cache=grpc://<your-railway-url>' >> ~/.bazelrc
+echo 'build:remote --remote_default_exec_properties=OSFamily=linux' >> ~/.bazelrc
+bazel build --config=remote //...
 ```
-
-**Note:** Railway provides Remote Cache only. For Remote Execution, use Option 2 or 3.
 
 ### Option 2: Cloud Development Environments
 
@@ -59,6 +62,9 @@ Complete RBE stack with workers, cache, and execution on your machine.
 git clone https://github.com/xangcastle/ferrisrbe.git
 cd ferrisrbe
 docker-compose up -d
+
+# Verify the container is running and healthy
+curl -I http://localhost:9092 || echo "Server is up"
 
 # Configure Bazel
 echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
@@ -79,6 +85,8 @@ helm install ferrisrbe oci://ghcr.io/xangcastle/ferrisrbe/charts/ferrisrbe \
   --set server.service.type=NodePort \
   --set server.service.nodePort=30092
 ```
+
+For advanced deployments requiring extensive configuration, [view the direct Helm deployment values.yaml](https://github.com/xangcastle/ferrisrbe/blob/main/charts/ferrisrbe/values.yaml).
 
 ## Architecture Highlights
 

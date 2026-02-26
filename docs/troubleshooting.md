@@ -102,24 +102,30 @@ bazel clean
 ```
 
 **Step 1: Inspect Build Event Protocol (BEP)**
-Extract the canonical command line using BEP. Verify your configuration to ensure remote caching wasn't silently disabled by inherited `.bazelrc` files (search for the `structured_command_line` field and options like `remote_accept_cached`):
+Extract the canonical command line using BEP to verify your configuration and find why the remote cache was silently disabled or missed by inherited `.bazelrc` files. Generating a JSON file is the most effective way:
 ```bash
 bazel build --config=remote //... \
-  --build_event_text_file=/tmp/bep.txt
+  --build_event_json_file=bep.json
 ```
 
-**Step 2: Verify Cache is Working**
+**Step 2: Instant Diagnostic Filter**
+The resulting `bep.json` file can be massive. Instead of reading it manually, use `jq` to instantly filter and extract the exact evaluated command line properties in milliseconds:
+```bash
+jq -c 'select(has("structuredCommandLine")) | .structuredCommandLine' bep.json
+```
+
+**Step 3: Verify Cache is Working**
 ```bash
 bazel build --config=remote //... 2>&1 | grep "remote cache hit"
 ```
 
-**Step 3: Check Action Determinism**
+**Step 4: Check Action Determinism**
 ```bash
 bazel build --config=remote //... && \
 bazel build --config=remote //... 2>&1 | grep "cache hit"
 ```
 
-**Step 4: Verify Cache Storage**
+**Step 5: Verify Cache Storage**
 ```bash
 kubectl exec -n rbe deploy/ferrisrbe-bazel-remote -- \
   ls -la /data/cas
