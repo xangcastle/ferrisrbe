@@ -1,5 +1,3 @@
-
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -45,12 +43,12 @@ pub struct WorkerConfig {
 }
 
 /// Actor-based PersistentWorker that avoids deadlock by using channels.
-/// 
+///
 /// CRITICAL FIX: This implementation uses the Actor pattern to prevent deadlock.
 /// - A single task owns the process and its I/O
-    /// - Requests are sent via mpsc channel
-    /// - Responses are routed back via oneshot channels stored in a HashMap
-    /// - tokio::select! multiplexes reading from channel and stdout
+/// - Requests are sent via mpsc channel
+/// - Responses are routed back via oneshot channels stored in a HashMap
+/// - tokio::select! multiplexes reading from channel and stdout
 pub struct PersistentWorker {
     worker_type: String,
     request_tx: mpsc::Sender<InternalRequest>,
@@ -83,7 +81,7 @@ impl PersistentWorker {
         let (request_tx, mut request_rx) = mpsc::channel::<InternalRequest>(100);
 
         let worker_type = config.worker_type.clone();
-        
+
         let handle = tokio::spawn(async move {
             let mut stdin = stdin;
             let mut stdout = BufReader::new(stdout);
@@ -182,7 +180,10 @@ impl PersistentWorker {
     /// CRITICAL FIX: This no longer holds a lock during await, preventing deadlock.
     pub async fn execute(&self, request: WorkRequest) -> anyhow::Result<WorkResponse> {
         let request_id = self.request_counter.fetch_add(1, Ordering::Relaxed);
-        let request = WorkRequest { request_id, ..request };
+        let request = WorkRequest {
+            request_id,
+            ..request
+        };
 
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -191,13 +192,13 @@ impl PersistentWorker {
             response_tx,
         };
 
-        self.request_tx.send(internal_req).await
+        self.request_tx
+            .send(internal_req)
+            .await
             .map_err(|_| anyhow::anyhow!("Worker task died"))?;
 
-        let response = tokio::time::timeout(
-            tokio::time::Duration::from_secs(60),
-            response_rx
-        ).await
+        let response = tokio::time::timeout(tokio::time::Duration::from_secs(60), response_rx)
+            .await
             .map_err(|_| anyhow::anyhow!("Timeout waiting for response"))?
             .map_err(|_| anyhow::anyhow!("Response channel closed"))?;
 
@@ -278,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiplex_worker() {
         let manager = MultiplexWorkerManager::new();
-        
+
         let _ = manager.stats().await;
     }
 }

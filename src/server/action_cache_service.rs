@@ -1,13 +1,10 @@
-
-
 use tonic::{Request, Response, Status};
 use tracing::info;
 
 use crate::cache::action_cache::{ActionResult as CacheActionResult, L1ActionCache};
 use crate::proto::build::bazel::remote::execution::v2::{
     action_cache_server::{ActionCache, ActionCacheServer},
-    ActionResult, ExecutedActionMetadata, GetActionResultRequest,
-    UpdateActionResultRequest,
+    ActionResult, ExecutedActionMetadata, GetActionResultRequest, UpdateActionResultRequest,
 };
 use crate::types::DigestInfo;
 
