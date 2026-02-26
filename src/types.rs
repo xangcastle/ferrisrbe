@@ -1,5 +1,3 @@
-
-
 use std::fmt;
 use std::hash::Hash;
 #[allow(unused_imports)]
@@ -23,10 +21,10 @@ pub fn init_global_base_instant() {
 }
 
 /// Get elapsed millis since the global base instant.
+/// Automatically initializes if not already done.
 fn elapsed_since_base() -> u64 {
     GLOBAL_BASE_INSTANT
-        .get()
-        .expect("GLOBAL_BASE_INSTANT not initialized")
+        .get_or_init(Instant::now)
         .elapsed()
         .as_millis() as u64
 }
@@ -86,11 +84,11 @@ impl DigestInfo {
     fn parse_sha256(hash_str: &str) -> [u8; 32] {
         let mut result = [0u8; 32];
         let bytes = hash_str.as_bytes();
-        
+
         for i in 0..32 {
             let high_idx = i * 2;
             let low_idx = i * 2 + 1;
-            
+
             if high_idx < bytes.len() {
                 let high = Self::hex_char_to_nibble(bytes[high_idx]);
                 let low = if low_idx < bytes.len() {
@@ -114,11 +112,11 @@ impl DigestInfo {
     }
 
     pub fn from_bytes(data: &[u8]) -> Self {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(data);
         let hash = hasher.finalize();
-        
+
         Self {
             hash: hash.into(),
             size: data.len() as i64,
@@ -139,9 +137,7 @@ impl DigestInfo {
 
     /// Convert the hash to a 64-character hex string
     pub fn hash_to_string(&self) -> String {
-        self.hash.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect()
+        self.hash.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
 
@@ -164,7 +160,6 @@ pub mod channels {
     use tokio::sync::mpsc;
 
     pub fn chunk_channel<T>() -> (mpsc::Sender<T>, mpsc::Receiver<T>) {
-
         mpsc::channel(CHANNEL_CHUNK_SIZE)
     }
 
@@ -202,6 +197,7 @@ pub type Result<T> = std::result::Result<T, RbeError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_digest_info_creation() {
@@ -227,14 +223,18 @@ mod tests {
     #[test]
     fn test_atomic_instant() {
         let _ = GLOBAL_BASE_INSTANT.get_or_init(Instant::now);
-        
+
         let instant = AtomicInstant::now();
         std::thread::sleep(Duration::from_millis(10));
         let elapsed = instant.elapsed_millis();
         assert!(elapsed >= 10, "Expected at least 10ms, got {}ms", elapsed);
-        
+
         instant.refresh();
         let elapsed_after_refresh = instant.elapsed_millis();
-        assert!(elapsed_after_refresh < 5, "Expected <5ms after refresh, got {}ms", elapsed_after_refresh);
+        assert!(
+            elapsed_after_refresh < 5,
+            "Expected <5ms after refresh, got {}ms",
+            elapsed_after_refresh
+        );
     }
 }

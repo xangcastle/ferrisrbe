@@ -1,5 +1,3 @@
-
-
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -24,23 +22,26 @@ pub mod proto {
             include!(concat!(env!("OUT_DIR"), "/google.rpc.rs"));
         }
     }
-    
+
     pub mod build {
         pub mod bazel {
             pub mod semver {
                 include!(concat!(env!("OUT_DIR"), "/build.bazel.semver.rs"));
             }
-            
+
             pub mod remote {
                 pub mod execution {
                     pub mod v2 {
-                        include!(concat!(env!("OUT_DIR"), "/build.bazel.remote.execution.v2.rs"));
+                        include!(concat!(
+                            env!("OUT_DIR"),
+                            "/build.bazel.remote.execution.v2.rs"
+                        ));
                     }
                 }
             }
         }
     }
-    
+
     pub mod ferris {
         pub mod rbe {
             pub mod worker {
@@ -99,7 +100,6 @@ mod integration_tests {
 
     #[test]
     fn test_full_stack_compilation() {
-
         let _digest = DigestInfo::new("test", 1024);
         let _cache = L1ActionCache::default();
         let _scheduler = MultiLevelScheduler::new();
