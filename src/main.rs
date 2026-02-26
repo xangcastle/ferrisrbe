@@ -72,9 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("║ ✓ Capabilities Service (REAPI v2.3)                           ║");
     info!("╚══════════════════════════════════════════════════════════════╝");
 
+    // Read port from RBE_PORT or PORT (Railway uses PORT)
     let port = std::env::var("RBE_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
+        .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(9092);
 
     let bind_address = std::env::var("RBE_BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
