@@ -51,75 +51,22 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
-      # Build AMD64 images
-      - name: Build AMD64 images
+      # Build and push multi-platform images using oci_push
+      # oci_push reads credentials from ~/.docker/config.json (created by docker/login-action)
+      - name: Build and push multi-platform images
         run: |
-          bazel build //oci:server_image_amd64 //oci:worker_image_amd64
-
-      # Build ARM64 images
-      - name: Build ARM64 images
-        run: |
-          bazel build //oci:server_image_arm64 //oci:worker_image_arm64
-
-      # Load AMD64 to Docker and tag
-      - name: Load and tag AMD64 images
-        run: |
-          bazel run //oci:server_load_amd64
-          bazel run //oci:worker_load_amd64
+          # Build all images (AMD64 + ARM64) and the multi-platform index
+          bazel build //oci:server_multiplatform //oci:worker_multiplatform
           
-          docker tag ferrisrbe/server:latest ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64
-          docker tag ferrisrbe/worker:latest ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64
+          # Push server multi-platform image (includes both AMD64 and ARM64)
+          bazel run //oci:server_push -- \
+            --tag ${{ steps.version.outputs.version }} \
+            --tag latest
           
-          docker push ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64
-          docker push ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64
-
-      # For ARM64, we need to use buildx since we're on AMD64 runner
-      - name: Build and push ARM64 images via buildx
-        run: |
-          # Export the tar files from Bazel for ARM64
-          bazel build //oci:server_image_arm64 //oci:worker_image_arm64
-          
-          # Create and push ARM64 images using the layers from Bazel
-          docker buildx build \
-            --platform linux/arm64 \
-            --tag ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-arm64 \
-            --tag ${{ env.IMAGE_PREFIX }}-server:latest-arm64 \
-            --push \
-            -f - . << 'EOF'
-          FROM debian:bookworm-slim
-          COPY --from=bazel-output bazel-bin/oci/server_binary_arm64/rbe-server /app/rbe_server
-          ENTRYPOINT ["/app/rbe_server"]
-          EXPOSE 9092
-          EOF
-          || echo "Buildx ARM64 build not yet supported, using alternative method"
-
-      # Alternative: Push individual architectures and create manifest
-      - name: Create and push multi-platform manifests
-        run: |
-          # Tag AMD64 as latest
-          docker tag ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64 ${{ env.IMAGE_PREFIX }}-server:latest-amd64
-          docker tag ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64 ${{ env.IMAGE_PREFIX }}-worker:latest-amd64
-          
-          docker push ${{ env.IMAGE_PREFIX }}-server:latest-amd64
-          docker push ${{ env.IMAGE_PREFIX }}-worker:latest-amd64
-          
-          # Create multi-platform manifests (AMD64 only for now until ARM64 is built)
-          docker manifest create ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }} \
-            --amend ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64
-          
-          docker manifest create ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }} \
-            --amend ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64
-          
-          docker manifest create ${{ env.IMAGE_PREFIX }}-server:latest \
-            --amend ${{ env.IMAGE_PREFIX }}-server:latest-amd64
-          
-          docker manifest create ${{ env.IMAGE_PREFIX }}-worker:latest \
-            --amend ${{ env.IMAGE_PREFIX }}-worker:latest-amd64
-          
-          docker manifest push ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}
-          docker manifest push ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}
-          docker manifest push ${{ env.IMAGE_PREFIX }}-server:latest
-          docker manifest push ${{ env.IMAGE_PREFIX }}-worker:latest
+          # Push worker multi-platform image (includes both AMD64 and ARM64)
+          bazel run //oci:worker_push -- \
+            --tag ${{ steps.version.outputs.version }} \
+            --tag latest
 
   create-release:
     name: Create Release

@@ -28,17 +28,20 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
           cargo install mdbook --version ^0.4 || true
 
       - name: Build Rust docs
         run: |
-          cargo doc --no-deps --document-private-items 2>/dev/null || true
+          cargo doc --no-deps --document-private-items
 
       - name: Prepare docs for GitHub Pages
         run: |
           mkdir -p _site
-          cp -r target/doc/* _site/ 2>/dev/null || true
+          cp -r target/doc/* _site/
           echo "<meta http-equiv=\"refresh\" content=\"0;url=./rbe_server/\">" > _site/index.html
+          touch _site/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
