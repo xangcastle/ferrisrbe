@@ -164,7 +164,7 @@ impl RbeServer {
         // Configure TLS if certificates are provided
         let tls_cert = std::env::var("RBE_TLS_CERT").ok();
         let tls_key = std::env::var("RBE_TLS_KEY").ok();
-        
+
         // Build base server configuration
         let mut server_builder = Server::builder()
             .tcp_keepalive(Some(Duration::from_secs(tcp_keepalive_secs)))
@@ -179,7 +179,8 @@ impl RbeServer {
             info!("Configuring TLS with provided certificates");
             let identity = Identity::from_pem(cert_pem.as_bytes(), key_pem.as_bytes());
             let tls_config = ServerTlsConfig::new().identity(identity);
-            server_builder = server_builder.tls_config(tls_config)
+            server_builder = server_builder
+                .tls_config(tls_config)
                 .map_err(|e| format!("Failed to configure TLS: {}", e))?;
             info!("TLS enabled successfully");
         } else {
