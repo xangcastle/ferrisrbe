@@ -550,7 +550,7 @@ bazel run //oci:load_all
 docker-compose up -d
 ```
 
-**Note:** docker-compose.yml currently uses image tag `0.1.0-test-amd64`. Update to `latest` after creating a release tag.
+**Note:** docker-compose.yml uses `latest` tag which is updated on every release.
 
 ### Railway Deployment (Remote Cache Only)
 
@@ -571,7 +571,7 @@ railway service create ferrisrbe-cache --source .
 | `RBE_PORT` | `${PORT}` | Server port (auto-assigned by Railway) |
 | `RUST_LOG` | `info` | Log level |
 
-**Current Image:** `0.1.0-test-amd64` (update to `latest` after release)
+**Current Image:** `xangcastle/ferris-server:latest`
 
 **For Full Remote Execution**, use Docker Compose or Helm locally:
 ```bash

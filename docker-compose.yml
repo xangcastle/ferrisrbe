@@ -36,7 +36,7 @@ services:
 
   # RBE Server
   server:
-    image: xangcastle/ferris-server:0.1.0-test-amd64
+    image: xangcastle/ferris-server:latest
     ports:
       - "9092:9092"
     environment:
@@ -60,7 +60,7 @@ services:
 
   # RBE Worker
   worker:
-    image: xangcastle/ferris-worker:0.1.0-test-amd64
+    image: xangcastle/ferris-worker:latest
     environment:
       - WORKER_ID=worker-local
       - SERVER_ENDPOINT=http://server:9092
