@@ -1,5 +1,3 @@
-
-
 use crate::proto::build::bazel::remote::execution::v2::ServerCapabilities;
 use tonic::Request;
 
@@ -11,7 +9,6 @@ pub struct BazelVersion {
 }
 
 impl BazelVersion {
-
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self {
             major,
@@ -66,7 +63,6 @@ pub enum ReapiVersion {
 }
 
 impl ReapiVersion {
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::V2_3 => "2.3",
@@ -76,7 +72,6 @@ impl ReapiVersion {
 }
 
 pub trait VersionDetector: Send + Sync {
-
     fn detect<T>(&self, request: &Request<T>) -> Option<BazelVersion>
     where
         T: Send + Sync + 'static;
@@ -86,7 +81,6 @@ pub trait VersionDetector: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait BazelVersionHandler: Send + Sync {
-
     fn version_range(&self) -> (BazelVersion, Option<BazelVersion>);
 
     fn adapt_capabilities(&self, caps: &mut ServerCapabilities, version: BazelVersion);
@@ -98,7 +92,6 @@ pub trait BazelVersionHandler: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReapiField {
-
     DeprecatedApiVersion,
 
     LowApiVersion,
@@ -139,7 +132,6 @@ impl VersionContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectionSource {
-
     GrpcHeader,
 
     UserAgent,

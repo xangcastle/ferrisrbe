@@ -1,5 +1,3 @@
-
-
 use crate::cache::action_cache::L1ActionCache;
 use crate::execution::results::ResultsStore;
 use crate::execution::scheduler::{ExecutableAction, MultiLevelScheduler};
@@ -73,7 +71,6 @@ impl ExecutionEngine {
     }
 
     pub fn spawn(self: Arc<Self>) {
-
         let dispatcher_engine = self.clone();
         tokio::spawn(async move {
             dispatcher_engine.dispatcher_loop().await;
@@ -119,11 +116,13 @@ impl ExecutionEngine {
                 let requirements = WorkerRequirements::default();
                 match self.worker_registry.select_worker(&requirements) {
                     Some(selected) => {
-
                         let assignment = WorkAssignment {
                             execution_id: format!("exec-{}", operation_id.0),
                             action_digest: Some(action.action_digest.to_string()),
-                            input_root_digest: action.input_root_digest.as_ref().map(|d| d.to_string()),
+                            input_root_digest: action
+                                .input_root_digest
+                                .as_ref()
+                                .map(|d| d.to_string()),
                             command: action.command.clone(),
                             timeout: action.timeout,
                             output_files: action.output_files.clone(),
@@ -192,7 +191,6 @@ impl ExecutionEngine {
                 let operation_id = OperationId(op_id_num);
 
                 if let Some(sm) = self.state_manager.get_machine(operation_id) {
-
                     let final_stage = if result.exit_code == 0 {
                         ExecutionStage::Completed
                     } else {
@@ -258,7 +256,6 @@ impl ExecutionEngine {
         action: ExecutableAction,
         state_machine: Arc<ExecutionStateMachine>,
     ) {
-
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         match self.scheduler.enqueue(action, state_machine) {
