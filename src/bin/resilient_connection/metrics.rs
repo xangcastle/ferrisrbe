@@ -29,13 +29,13 @@ impl ConnectionMetrics {
         if !self.enabled {
             return;
         }
-        
+
         self.total_connections_established += 1;
-        
+
         if self.last_connection_time.is_some() {
             self.total_reconnections += 1;
         }
-        
+
         self.last_connection_time = Some(Instant::now());
     }
 
@@ -43,13 +43,13 @@ impl ConnectionMetrics {
         if !self.enabled {
             return;
         }
-        
+
         self.total_disconnections += 1;
-        
+
         if let Some(start) = self.last_connection_time.take() {
             let duration = Instant::now().duration_since(start);
             self.connection_durations.push_back(duration);
-            
+
             if self.connection_durations.len() > 100 {
                 self.connection_durations.pop_front();
             }
@@ -68,7 +68,7 @@ impl ConnectionMetrics {
         if self.connection_durations.is_empty() {
             return 0.0;
         }
-        
+
         let total: Duration = self.connection_durations.iter().sum();
         total.as_secs_f64() / self.connection_durations.len() as f64
     }
