@@ -45,7 +45,7 @@ pub struct HealthCheckResult {
 }
 
 /// Bidirectional health checker
-/// 
+///
 /// Performs periodic health checks and adapts keepalive based on results.
 /// Uses application-level pings in addition to gRPC keepalive for better
 /// detection of stuck connections.
@@ -69,12 +69,15 @@ impl HealthChecker {
     }
 
     /// Start the health check loop
-    pub async fn run<F>(self, check_fn: F) 
+    pub async fn run<F>(self, check_fn: F)
     where
-        F: Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthCheckResult> + Send>> + Send + Sync + 'static,
+        F: Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = HealthCheckResult> + Send>>
+            + Send
+            + Sync
+            + 'static,
     {
         let mut ticker = interval(Duration::from_secs(self.config.interval_secs));
-        
+
         info!(
             "Health checker started: interval={}s, timeout={}s",
             self.config.interval_secs, self.config.timeout_secs
@@ -88,10 +91,8 @@ impl HealthChecker {
                 continue;
             }
 
-            let check_result = timeout(
-                Duration::from_secs(self.config.timeout_secs),
-                check_fn()
-            ).await;
+            let check_result =
+                timeout(Duration::from_secs(self.config.timeout_secs), check_fn()).await;
 
             match check_result {
                 Ok(result) => {
@@ -103,7 +104,8 @@ impl HealthChecker {
                         healthy: false,
                         rtt: None,
                         error: Some("Timeout".to_string()),
-                    }).await;
+                    })
+                    .await;
                 }
             }
         }
@@ -112,12 +114,12 @@ impl HealthChecker {
     async fn handle_check_result(&self, result: HealthCheckResult) {
         if result.healthy {
             let rtt = result.rtt.unwrap_or(Duration::ZERO);
-            
+
             self.manager.record_health_check_success(rtt).await;
-            
+
             let mut successes = self.consecutive_successes.write().await;
             *successes += 1;
-            
+
             let mut failures = self.consecutive_failures.write().await;
             if *successes >= self.config.success_threshold {
                 *failures = 0;
@@ -129,12 +131,14 @@ impl HealthChecker {
             );
         } else {
             let error = result.error.unwrap_or_else(|| "Unknown error".to_string());
-            
-            self.manager.record_health_check_failure(error.clone()).await;
-            
+
+            self.manager
+                .record_health_check_failure(error.clone())
+                .await;
+
             let mut failures = self.consecutive_failures.write().await;
             *failures += 1;
-            
+
             let mut successes = self.consecutive_successes.write().await;
             *successes = 0;
 
@@ -148,11 +152,13 @@ impl HealthChecker {
                     "Health check failure threshold exceeded ({}), triggering reconnection",
                     self.config.failure_threshold
                 );
-                
-                self.manager.record_disconnected(format!(
-                    "Health check failures exceeded threshold: {}",
-                    error
-                )).await;
+
+                self.manager
+                    .record_disconnected(format!(
+                        "Health check failures exceeded threshold: {}",
+                        error
+                    ))
+                    .await;
             }
         }
     }
@@ -172,10 +178,9 @@ impl HealthChecker {
 
 /// Simple ping health check that sends a lightweight gRPC call
 #[allow(dead_code)]
-pub async fn simple_ping_check(
-) -> HealthCheckResult {
+pub async fn simple_ping_check() -> HealthCheckResult {
     let start = Instant::now();
-    
+
     HealthCheckResult {
         healthy: true,
         rtt: Some(start.elapsed()),
