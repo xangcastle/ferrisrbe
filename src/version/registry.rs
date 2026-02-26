@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -12,9 +10,7 @@ pub struct VersionRegistry {
 }
 
 impl VersionRegistry {
-
     pub fn new() -> Self {
-
         let default_handler: Arc<dyn BazelVersionHandler> = Arc::new(Bazel9Handler::new());
 
         Self {
@@ -77,10 +73,7 @@ impl VersionRegistry {
         match version {
             Some(v) => self.get_handler(v),
             None => {
-                debug!(
-                    "Using default handler: '{}'",
-                    self.default_handler.name()
-                );
+                debug!("Using default handler: '{}'", self.default_handler.name());
                 self.default_handler.clone()
             }
         }

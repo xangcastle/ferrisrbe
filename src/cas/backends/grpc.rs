@@ -13,15 +13,17 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::cas::{CasBackend, CasError, CasResult};
 use crate::proto::build::bazel::remote::execution::v2::content_addressable_storage_client::ContentAddressableStorageClient;
-use crate::proto::build::bazel::remote::execution::v2::{BatchReadBlobsRequest, BatchUpdateBlobsRequest, Digest};
+use crate::proto::build::bazel::remote::execution::v2::{
+    BatchReadBlobsRequest, BatchUpdateBlobsRequest, Digest,
+};
 use crate::proto::google::bytestream::byte_stream_client::ByteStreamClient;
 use crate::proto::google::bytestream::{ReadRequest, WriteRequest};
-use uuid::Uuid;
 use crate::types::DigestInfo;
-use tonic::transport::Channel;
 use futures::StreamExt;
 #[allow(unused_imports)]
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::Channel;
+use uuid::Uuid;
 
 /// gRPC-based CAS backend that connects to an external CAS service
 pub struct GrpcCasBackend {
@@ -39,18 +41,19 @@ pub struct GrpcCasBackend {
 impl GrpcCasBackend {
     /// Create a new gRPC CAS backend with retries
     pub async fn new(endpoint: &str) -> CasResult<Self> {
-        let endpoint_owned: String = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-            endpoint.to_string()
-        } else {
-            format!("http://{}", endpoint)
-        };
-        
+        let endpoint_owned: String =
+            if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                endpoint.to_string()
+            } else {
+                format!("http://{}", endpoint)
+            };
+
         let mut last_error = None;
         for attempt in 1..=30 {
             match Channel::from_shared(endpoint_owned.clone())
                 .map_err(|e| CasError::Storage(format!("Invalid endpoint: {}", e)))?
                 .connect()
-                .await 
+                .await
             {
                 Ok(channel) => {
                     let max_msg_size = std::env::var("RBE_MAX_GRPC_MSG_SIZE")
@@ -63,8 +66,11 @@ impl GrpcCasBackend {
                     let byte_stream_client = ByteStreamClient::new(channel.clone())
                         .max_decoding_message_size(max_msg_size)
                         .max_encoding_message_size(max_msg_size);
-                    info!("Connected to gRPC CAS backend at: {} (attempt {})", endpoint, attempt);
-                    
+                    info!(
+                        "Connected to gRPC CAS backend at: {} (attempt {})",
+                        endpoint, attempt
+                    );
+
                     return Ok(Self {
                         client,
                         byte_stream_client,
@@ -75,23 +81,33 @@ impl GrpcCasBackend {
                 Err(e) => {
                     last_error = Some(e);
                     if attempt < 30 {
-                        info!("Waiting for CAS at {} (attempt {}/30)...", endpoint, attempt);
+                        info!(
+                            "Waiting for CAS at {} (attempt {}/30)...",
+                            endpoint, attempt
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                     }
                 }
             }
         }
-        
+
         Err(CasError::Io(std::io::Error::new(
             std::io::ErrorKind::ConnectionRefused,
-            format!("Failed to connect to CAS at {} after 30 attempts: {:?}", endpoint, last_error)
+            format!(
+                "Failed to connect to CAS at {} after 30 attempts: {:?}",
+                endpoint, last_error
+            ),
         )))
     }
-    
+
     /// Convert DigestInfo to proto Digest
     fn to_proto_digest(&self, digest: &DigestInfo) -> Digest {
         let hash_str = digest.hash_to_string();
-        trace!("Converting DigestInfo to proto Digest: hash={}, size={}", hash_str, digest.size);
+        trace!(
+            "Converting DigestInfo to proto Digest: hash={}, size={}",
+            hash_str,
+            digest.size
+        );
         Digest {
             hash: hash_str,
             size_bytes: digest.size,
@@ -102,14 +118,18 @@ impl GrpcCasBackend {
 #[async_trait]
 impl CasBackend for GrpcCasBackend {
     async fn contains(&self, digest: &DigestInfo) -> CasResult<bool> {
-        trace!("GrpcCasBackend::contains() called for digest: {} (size={})", digest.hash_to_string(), digest.size);
-        
+        trace!(
+            "GrpcCasBackend::contains() called for digest: {} (size={})",
+            digest.hash_to_string(),
+            digest.size
+        );
+
         let request = crate::proto::build::bazel::remote::execution::v2::FindMissingBlobsRequest {
             instance_name: self.instance_name.clone(),
             blob_digests: vec![self.to_proto_digest(digest)],
             digest_function: 1,
         };
-        
+
         let mut client = self.client.clone();
         match client.find_missing_blobs(request).await {
             Ok(response) => {
@@ -122,17 +142,21 @@ impl CasBackend for GrpcCasBackend {
             }
         }
     }
-    
+
     async fn read(&self, digest: &DigestInfo) -> CasResult<Option<Bytes>> {
-        trace!("GrpcCasBackend::read() called for digest: {} (size={})", digest.hash_to_string(), digest.size);
-        
+        trace!(
+            "GrpcCasBackend::read() called for digest: {} (size={})",
+            digest.hash_to_string(),
+            digest.size
+        );
+
         let request = BatchReadBlobsRequest {
             instance_name: self.instance_name.clone(),
             digests: vec![self.to_proto_digest(digest)],
             acceptable_compressors: vec![],
             digest_function: 1,
         };
-        
+
         let mut client = self.client.clone();
         match client.batch_read_blobs(request).await {
             Ok(response) => {
@@ -148,7 +172,7 @@ impl CasBackend for GrpcCasBackend {
             }
         }
     }
-    
+
     async fn read_stream(
         &self,
         digest: &DigestInfo,
@@ -161,14 +185,14 @@ impl CasBackend for GrpcCasBackend {
             digest.hash_to_string(),
             digest.size
         );
-        
+
         let read_limit = limit.map(|l| l as i64).unwrap_or(0);
         let request = ReadRequest {
             resource_name,
             read_offset: offset as i64,
             read_limit,
         };
-        
+
         let mut client = self.byte_stream_client.clone();
         match client.read(request).await {
             Ok(response) => {
@@ -180,7 +204,11 @@ impl CasBackend for GrpcCasBackend {
                 Ok(Some(Box::pin(stream)))
             }
             Err(e) => {
-                warn!("Failed to start ByteStream read for {}: {}", digest.hash_to_string(), e);
+                warn!(
+                    "Failed to start ByteStream read for {}: {}",
+                    digest.hash_to_string(),
+                    e
+                );
                 if digest.size < 4 * 1024 * 1024 {
                     match self.read(digest).await? {
                         Some(data) => {
@@ -195,7 +223,7 @@ impl CasBackend for GrpcCasBackend {
             }
         }
     }
-    
+
     async fn write(&self, digest: &DigestInfo, data: Bytes) -> CasResult<()> {
         let request = BatchUpdateBlobsRequest {
             instance_name: self.instance_name.clone(),
@@ -206,7 +234,7 @@ impl CasBackend for GrpcCasBackend {
             }],
             digest_function: 1,
         };
-        
+
         let mut client = self.client.clone();
         match client.batch_update_blobs(request).await {
             Ok(response) => {
@@ -222,7 +250,7 @@ impl CasBackend for GrpcCasBackend {
             }
         }
     }
-    
+
     async fn write_stream(
         &self,
         digest: &DigestInfo,
@@ -249,17 +277,23 @@ impl CasBackend for GrpcCasBackend {
                     Ok(chunk) => {
                         let chunk_len = chunk.len() as i64;
                         let request = WriteRequest {
-                            resource_name: if is_first { resource_name_clone.clone() } else { String::new() },
+                            resource_name: if is_first {
+                                resource_name_clone.clone()
+                            } else {
+                                String::new()
+                            },
                             write_offset: offset,
                             finish_write: false,
                             data: chunk.to_vec(),
                         };
-                        
+
                         if tx.send(request).await.is_err() {
                             error!("ByteStream receiver dropped");
-                            return Err(CasError::Storage("ByteStream receiver dropped".to_string()));
+                            return Err(CasError::Storage(
+                                "ByteStream receiver dropped".to_string(),
+                            ));
                         }
-                        
+
                         offset += chunk_len;
                         is_first = false;
                     }
@@ -271,12 +305,16 @@ impl CasBackend for GrpcCasBackend {
             }
 
             let final_request = WriteRequest {
-                resource_name: if is_first { resource_name_clone } else { String::new() },
+                resource_name: if is_first {
+                    resource_name_clone
+                } else {
+                    String::new()
+                },
                 write_offset: offset,
                 finish_write: true,
                 data: vec![],
             };
-            
+
             let _ = tx.send(final_request).await;
             Ok(())
         });
@@ -293,17 +331,16 @@ impl CasBackend for GrpcCasBackend {
                     Ok(Err(e)) => {
                         // Local stream failed - abort the upload even if gRPC returned OK
                         return Err(CasError::Storage(format!(
-                            "Local stream error during ByteStream upload: {}", e
+                            "Local stream error during ByteStream upload: {}",
+                            e
                         )));
                     }
                     Err(e) => {
                         // Task panicked or was cancelled
-                        return Err(CasError::Storage(format!(
-                            "Stream task failed: {}", e
-                        )));
+                        return Err(CasError::Storage(format!("Stream task failed: {}", e)));
                     }
                 }
-                
+
                 let committed = response.into_inner().committed_size;
                 if committed != digest.size {
                     return Err(CasError::Storage(format!(
@@ -311,21 +348,27 @@ impl CasBackend for GrpcCasBackend {
                         digest.size, committed
                     )));
                 }
-                debug!("ByteStream upload successful for {}", digest.hash_to_string());
+                debug!(
+                    "ByteStream upload successful for {}",
+                    digest.hash_to_string()
+                );
                 Ok(())
             }
             Err(e) => {
                 stream_task.abort();
-                Err(CasError::Storage(format!("gRPC ByteStream write failed: {}", e)))
+                Err(CasError::Storage(format!(
+                    "gRPC ByteStream write failed: {}",
+                    e
+                )))
             }
         }
     }
-    
+
     async fn delete(&self, _digest: &DigestInfo) -> CasResult<()> {
         debug!("Delete not supported by gRPC CAS backend");
         Ok(())
     }
-    
+
     async fn local_path(&self, _digest: &DigestInfo) -> CasResult<Option<PathBuf>> {
         Ok(None)
     }

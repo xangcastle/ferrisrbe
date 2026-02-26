@@ -1,3 +1,4 @@
 target
 .idea
 MODULE.bazel.lock
+logs_*
