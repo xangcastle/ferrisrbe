@@ -5,8 +5,6 @@ ferrisrbe/
 ├── Cargo.toml              # Rust workspace configuration
 ├── Cargo.lock              # Dependency lock file
 ├── build.rs                # Build script (protobuf generation)
-├── Dockerfile              # Server container image (legacy)
-├── Dockerfile.worker       # Worker container image (legacy)
 │
 ├── oci/                    # OCI container definitions (rules_oci)
 │   └── BUILD.bazel         # Multi-platform image definitions

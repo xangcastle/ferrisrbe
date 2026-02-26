@@ -82,6 +82,52 @@ platform(
 )
 ```
 
+## Hermeticity Best Practices
+
+Maintaining strict hermeticity is absolute when using FerrisRBE. If your environment leaks state, the remote cache is effectively useless.
+
+### Execution Log Parser
+To diagnose differing action hashes between local and remote execution, use Bazel's native Execution Log Parser:
+
+```bash
+bazel build --config=remote-exec //... --execution_log_compact_file=/tmp/exec.log
+```
+Compare this log against a local run to pinpoint exact differences in injected variables or inputs.
+
+### Strict Environment Variables
+Prevent your host environment from poisoning the remote cache by strictly isolating the `PATH` and other variables in your `.bazelrc`:
+
+```bash
+build --action_env=PATH=/bin:/usr/bin:/usr/local/bin
+build --incompatible_strict_action_env=true
+```
+
+### Non-Hermetic Targets
+If an action inherently requires timestamps, absolute paths, or non-deterministic outputs by design, you must explicitly exclude it from the remote cache to avoid poisoning it:
+
+```starlark
+genrule(
+    name = "generate_timestamp",
+    # ...
+    tags = ["no-remote-cache"],
+)
+```
+
+## Persistent Workers Configuration
+
+FerrisRBE fully supports Bazel's formal persistent worker protocol for long-term JIT compilation and AST retention. To leverage this in your custom Starlark rules, specify the correct `execution_requirements`:
+
+```starlark
+my_rule = rule(
+    implementation = _my_rule_impl,
+    attrs = {...},
+    execution_requirements = {
+        "supports-workers": "1",
+        "requires-worker-protocol": "proto", # or "json"
+    },
+)
+```
+
 ## Bazel Version Compatibility
 
 FerrisRBE is tested with:

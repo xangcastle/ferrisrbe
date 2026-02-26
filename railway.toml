@@ -1,19 +1,21 @@
-# Railway deployment configuration
-# Deploy to Railway: https://railway.app/template
-
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+# Railway deployment configuration - REMOTE CACHE ONLY
+# 
+# This deploys only the FerrisRBE server for Remote Cache functionality.
+# Remote Execution requires workers which are not deployed in Railway (use Docker Compose or Kubernetes for full RBE).
+#
+# Deploy: railway service create ferrisrbe-cache --source railway
 
 [deploy]
-startCommand = "./rbe_server"
+image = "xangcastle/ferris-server:0.1.0-test-amd64"
+startCommand = "/app/rbe_server"
 healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
-# Required environment variables for Railway
 [deploy.env]
 RBE_PORT = "${PORT}"
 RBE_BIND_ADDRESS = "0.0.0.0"
 RUST_LOG = "info"
+# Cache-only mode - no external Redis or CAS required
+# Uses in-memory L1 Action Cache (DashMap) and local filesystem CAS
