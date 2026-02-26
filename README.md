@@ -28,17 +28,48 @@ Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ m
 * **12-Factor by Default:** No XML, no YAML, no properties files. Just environment variables that operators already know how to manage.
 * **Adaptive Resilience:** Workers auto-tune keepalive intervals based on network conditions. Transient failures don't fail builds.
 
-## 🚀 Try it in 60 Seconds
+## 🚀 Quick Start
 
-Don't take our word for it. Spin up an ephemeral instance right now.
+### Option 1: Railway (Easiest - Remote Cache)
+
+Deploy a managed Remote Cache instance with one click. Free tier available.
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/ferrisrbe)
+
+```bash
+# Or use CLI
+railway service create ferrisrbe-cache --source .
+
+# Configure Bazel with your Railway URL
+echo 'build:remote --remote_cache=grpc://<your-railway-url>' >> ~/.bazelrc
+```
+
+**Note:** Railway provides Remote Cache only. For Remote Execution, use Option 2 or 3.
+
+### Option 2: Cloud Development Environments
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/xangcastle/ferrisrbe?quickstart=1)
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/xangcastle/ferrisrbe)
 
-Or deploy locally:
+### Option 3: Docker Compose (Full RBE - Local)
+
+Complete RBE stack with workers, cache, and execution on your machine.
 
 ```bash
-# One-line install with Helm
+git clone https://github.com/xangcastle/ferrisrbe.git
+cd ferrisrbe
+docker-compose up -d
+
+# Configure Bazel
+echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
+echo 'build:remote --remote_cache=grpc://localhost:9092' >> ~/.bazelrc
+bazel build --config=remote //...
+```
+
+### Option 4: Kubernetes (Production)
+
+```bash
+# Helm install
 helm install ferrisrbe oci://ghcr.io/xangcastle/ferrisrbe/charts/ferrisrbe \
   --namespace rbe --create-namespace
 
@@ -47,19 +78,6 @@ helm install ferrisrbe oci://ghcr.io/xangcastle/ferrisrbe/charts/ferrisrbe \
   --namespace rbe --create-namespace \
   --set server.service.type=NodePort \
   --set server.service.nodePort=30092
-```
-
-### Docker Compose (Local Testing)
-
-```bash
-# Clone and spin up
-git clone https://github.com/xangcastle/ferrisrbe.git
-cd ferrisrbe
-docker-compose up -d
-
-# Test with your Bazel project
-echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
-bazel build --config=remote //...
 ```
 
 ## Architecture Highlights

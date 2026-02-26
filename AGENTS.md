@@ -8,19 +8,20 @@
 **FerrisRBE** is a high-performance Remote Build Execution (RBE) server for Bazel, implemented in Rust. It implements the Remote Execution v2.4 API (REAPI) providing caching and remote execution capabilities for Bazel builds.
 
 ### Key Features
-- Full Remote Execution - Dispatches actions to workers in Kubernetes
-- Remote Caching - Action cache and CAS (Content Addressable Storage)
-- Bidirectional Streaming - Persistent gRPC connection between server and workers
-- Auto-scaling - Workers scale automatically (5-100 replicas)
-- Version Detection - Adapts responses based on Bazel version
-- State Machine - Strict state machine for execution lifecycle
-- Multi-level Scheduling - Priority queues for different action types
+- **Full Remote Execution** - Dispatches actions to workers in Kubernetes
+- **Remote Caching** - Action cache and CAS (Content Addressable Storage)
+- **Bidirectional Streaming** - Persistent gRPC connection between server and workers
+- **Auto-scaling** - Workers scale automatically (configurable replicas)
+- **Version Detection** - Adapts responses based on Bazel version
+- **State Machine** - Strict state machine for execution lifecycle
+- **Multi-level Scheduling** - Priority queues for different action types
+- **Resilient Connection** - Adaptive keepalive and automatic reconnection for workers
 
 ## Technology Stack
 
-- **Language**: Rust 1.84.0
+- **Language**: Rust 1.85.0
 - **Build System**: Bazel 8.3.0 (with bzlmod)
-- **Rust Rules**: rules_rust 0.57.1 with crate_universe
+- **Rust Rules**: rules_rust 0.59.1 with crate_universe
 - **Container Rules**: rules_oci 2.2.3
 - **gRPC Framework**: Tonic 0.12 (with TLS support)
 - **Protobuf**: prost 0.13
@@ -28,7 +29,7 @@
 - **Concurrency**: DashMap (64 shards), parking_lot, crossbeam
 - **Serialization**: serde, prost-types
 - **Observability**: tracing, tracing-subscriber
-- **Deployment**: OCI containers, Kubernetes
+- **Deployment**: OCI containers, Kubernetes, Helm charts
 
 ## Project Structure
 
@@ -40,8 +41,6 @@ ferrisrbe/
 ├── Cargo.toml              # Rust configuration - defines rbe-server and rbe-worker binaries
 ├── Cargo.lock              # Dependency lock file
 ├── build.rs                # Build script for protobuf code generation
-├── Dockerfile              # Server container image (multi-stage build) - legacy
-├── Dockerfile.worker       # Worker container image - legacy
 │
 ├── oci/                    # OCI container image definitions (rules_oci)
 │   └── BUILD.bazel         # Image definitions for server and worker
@@ -54,8 +53,17 @@ ferrisrbe/
 │   └── google/...          # Standard Google protos (longrunning, rpc, etc.)
 │
 ├── src/
+│   ├── lib.rs              # Library entry point
 │   ├── main.rs             # Server binary entry point
 │   ├── bin/worker.rs       # Worker binary entry point
+│   ├── bin/resilient_connection/  # Worker connection management modules
+│   │   ├── mod.rs          # Module exports
+│   │   ├── connection_manager.rs  # Connection lifecycle management
+│   │   ├── connection_state.rs    # Connection state machine
+│   │   ├── adaptive_keepalive.rs  # Adaptive keepalive tuning
+│   │   ├── health_checker.rs      # Health checking
+│   │   ├── metrics.rs             # Connection metrics
+│   │   └── reconnection.rs        # Reconnection strategies
 │   ├── server/             # gRPC service implementations
 │   │   ├── mod.rs          # RbeServer struct and configuration
 │   │   ├── execution_service.rs    # REAPI Execution service
@@ -66,6 +74,7 @@ ferrisrbe/
 │   │   ├── capabilities_service.rs # Capabilities service (REAPI discovery)
 │   │   └── middleware.rs           # gRPC middleware
 │   ├── execution/          # Execution engine
+│   │   ├── mod.rs          # Module exports
 │   │   ├── engine.rs       # ExecutionEngine (dispatcher, result processor)
 │   │   ├── scheduler.rs    # MultiLevelScheduler (Fast/Medium/Slow queues)
 │   │   ├── state_machine.rs # ExecutionStateMachine with strict transitions
@@ -75,12 +84,19 @@ ferrisrbe/
 │   │   ├── mod.rs          # CasBackend trait and SharedCasBackend type
 │   │   ├── error.rs        # CasError for CAS operations
 │   │   └── backends/       # Storage backend implementations
-│   │       └── disk.rs     # DiskBackend - filesystem-based storage
+│   │       ├── disk.rs     # DiskBackend - filesystem-based storage
+│   │       ├── grpc.rs     # GrpcCasBackend - gRPC-based CAS proxy
+│   │       ├── http_proxy.rs # HTTP proxy backend
+│   │       └── mod.rs      # Backend exports
 │   ├── worker/             # Worker management
+│   │   ├── mod.rs          # Module exports, ActionResult, WorkerId
 │   │   ├── k8s.rs          # WorkerRegistry for Kubernetes workers
 │   │   ├── pool.rs         # Worker pool management
-│   │   └── multiplex.rs    # Multiplexing for worker connections
+│   │   ├── multiplex.rs    # Multiplexing for worker connections
+│   │   ├── materializer.rs # Merkle tree materialization for execroot
+│   │   └── output_uploader.rs # Output uploading to CAS
 │   ├── cache/              # Cache implementations
+│   │   ├── mod.rs          # Module exports
 │   │   └── action_cache.rs # L1ActionCache using DashMap (64 shards)
 │   ├── version/            # Bazel version detection
 │   │   ├── mod.rs          # VersionManager
@@ -88,7 +104,7 @@ ferrisrbe/
 │   │   ├── registry.rs     # VersionRegistry with handlers
 │   │   ├── traits.rs       # BazelVersionHandler trait
 │   │   └── handlers/       # Version-specific handlers (v7, v8, v9)
-│   └── types.rs            # Core types: DigestInfo, RbeError, etc.
+│   └── types.rs            # Core types: DigestInfo, RbeError, AtomicInstant
 │
 ├── k8s/                    # Kubernetes manifests
 │   ├── deploy.sh           # Deployment script
@@ -100,6 +116,12 @@ ferrisrbe/
 │   ├── bazel-remote.yaml   # CAS storage (bazel-remote)
 │   └── redis.yaml          # Metadata store
 │
+├── charts/                 # Helm charts
+│   └── ferrisrbe/
+│       ├── Chart.yaml
+│       ├── values.yaml     # Configuration values
+│       └── templates/      # Kubernetes templates
+│
 ├── scripts/                # Utility scripts
 │   └── run-local.sh        # Run server locally with cargo
 │
@@ -107,94 +129,105 @@ ferrisrbe/
 │   ├── bazel-7.4/
 │   ├── bazel-8.x/
 │   └── bazel-9.x/
+│
+└── docs/                   # Documentation
+    ├── architecture.md     # System architecture
+    ├── configuration.md    # Environment variables
+    ├── deployment.md       # Deployment guide
+    ├── bazel-integration.md # Bazel configuration
+    └── troubleshooting.md  # Common issues
 ```
 
 ## Build Commands
 
-### Bazel Build (Recomendado)
+### Bazel Build (Recommended)
 
-Este proyecto ahora se compila con **Bazel 8.3.0** (definido en `.bazelversion`).
+This project builds with **Bazel 8.3.0** (defined in `.bazelversion`).
 
-#### Primera configuración
+#### First Time Setup
 ```bash
-# Instalar Bazelisk (si no lo tienes)
+# Install Bazelisk (if you don't have it)
 curl -Lo bazelisk https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
 chmod +x bazelisk && sudo mv bazelisk /usr/local/bin/bazel
 
-# Sincronizar dependencias de Rust (primera vez o cuando cambie Cargo.toml)
+# Sync Rust dependencies (first time or when Cargo.toml changes)
 CARGO_BAZEL_REPIN=1 bazel sync --only=crates
 ```
 
-#### Compilación básica
+#### Basic Build Commands
 ```bash
-# Compilar todo
+# Build everything
 bazel build //...
 
-# Compilar solo el servidor
+# Build server only
 bazel build //:server
-# o
+# or
 bazel build //:rbe-server
 
-# Compilar solo el worker
+# Build worker only
 bazel build //:worker
-# o
+# or
 bazel build //:rbe-worker
 
-# Compilación de release (optimizada)
+# Release build (optimized)
 bazel build --config=release //...
 
-# Compilación rápida para desarrollo
+# Development build (fast)
 bazel build --config=dev //...
+
+# Debug build
+bazel build --config=debug //...
 ```
 
-#### Construir imágenes de contenedor
+#### Build Container Images
 ```bash
-# Construir imágenes
+# Build images
 bazel build //oci:server_image //oci:worker_image
 
-# Cargar directamente en Docker (recomendado - usa oci_load)
+# Load directly into Docker (uses oci_load)
 bazel run //oci:server_load
 bazel run //oci:worker_load
 
-# O cargar ambas a la vez
+# Load both at once
 bazel run //oci:load_all
 
-# Alternativa: construir tarball y cargar manualmente
-bazel build //oci:server_tarball //oci:worker_tarball
-docker load -i bazel-bin/oci/server_tarball/tarball.tar
-docker load -i bazel-bin/oci/worker_tarball/tarball.tar
+# Push images (requires Docker credentials)
+bazel run //oci:server_push
+bazel run //oci:worker_push
 ```
 
-#### Ejecutar tests
+#### Run Tests
 ```bash
-# Todos los tests
+# All tests
 bazel test //...
 
-# Con output detallado
+# With verbose output
 bazel test --test_output=all //...
+
+# Specific test
+bazel test //:rbe_lib_test
 ```
 
-### Cargo Build (Legacy)
+### Cargo Build (Development)
 
-Todavía puedes usar Cargo para desarrollo rápido:
+For rapid development, you can still use Cargo:
 
-#### Development Build
 ```bash
+# Development build
 cargo build
-```
 
-#### Release Build (optimized)
-```bash
+# Release build (optimized)
 cargo build --release
-```
 
-#### Build Specific Binary
-```bash
-# Server binary
+# Build specific binary
 cargo build --release --bin rbe-server
-
-# Worker binary
 cargo build --release --bin rbe-worker
+
+# Run tests
+cargo test
+
+# Run with output
+cargo test -- --nocapture
 ```
 
 #### Protobuf Code Generation
@@ -227,7 +260,10 @@ cargo run --release
 ### Kubernetes Deployment
 
 ```bash
-# Full deploy to cluster
+# Full deploy using Helm
+helm install ferrisrbe ./charts/ferrisrbe --namespace rbe --create-namespace
+
+# Or using raw manifests
 ./k8s/deploy.sh
 
 # Verify pods
@@ -237,17 +273,17 @@ kubectl get pods -n rbe
 ./k8s/port-forward.sh
 ```
 
-### Running Tests
+### Docker Compose (Local Testing)
 
 ```bash
-# Run all tests
-cargo test
+# Start all services
+docker-compose up -d
 
-# Run specific test
-cargo test test_state_machine_full_flow
+# View logs
+docker-compose logs -f
 
-# Run with output
-cargo test -- --nocapture
+# Stop
+docker-compose down
 ```
 
 ## Architecture Overview
@@ -288,9 +324,11 @@ CacheCheck → Queued → Assigned → Downloading → Executing → Uploading �
 | WorkerRegistry | `src/worker/k8s.rs` | Worker registration and selection |
 | L1ActionCache | `src/cache/action_cache.rs` | In-memory action result cache (DashMap) |
 | CasBackend | `src/cas/mod.rs` | Unified CAS storage trait for all services |
-| DiskBackend | `src/cas/backends/disk.rs` | Filesystem-based CAS implementation |
-| OutputHandler | `src/execution/output_handler.rs` | Large output streaming to CAS (AUDIT-1.3) |
+| GrpcCasBackend | `src/cas/backends/grpc.rs` | gRPC-based CAS proxy to bazel-remote |
+| OutputHandler | `src/execution/output_handler.rs` | Large output streaming to CAS |
 | VersionManager | `src/version/mod.rs` | Bazel version detection and handling |
+| ConnectionManager | `src/bin/resilient_connection/connection_manager.rs` | Worker connection lifecycle |
+| Materializer | `src/worker/materializer.rs` | Execroot materialization with Merkle trees |
 
 ### CAS (Content Addressable Storage) Architecture
 
@@ -305,38 +343,30 @@ FerrisRBE uses a **unified CAS backend** that is shared between `CasService` and
          └───────────┬───────────┘
                      │
          ┌───────────▼───────────┐
-         │   CasBackend Trait    │
-         │   (Arc<dyn Trait>)    │
-         └───────────┬───────────┘
+│   CasBackend Trait    │
+│   (Arc<dyn Trait>)    │
+└───────────┬───────────┘
                      │
          ┌───────────▼───────────┐
-         │   DiskBackend         │
-         │   (/data/cas)         │
-         │                       │
-         │  aa/bb/aabbccdd...    │
-         └───────────────────────┘
+│   GrpcCasBackend      │
+│   (bazel-remote)      │
+└───────────────────────┘
 ```
 
-**Storage Layout:** Blobs are stored in a content-addressed filesystem structure:
-- Path: `<CAS_STORAGE_PATH>/aa/bb/<hash_remainder>`
-- Two-level prefix prevents too many files in a single directory
-- Atomic writes using temp files + rename
+**Storage Backend Options:**
+- **DiskBackend** - Filesystem-based storage (local CAS)
+- **GrpcCasBackend** - gRPC proxy to external CAS (bazel-remote)
+- **HttpProxyBackend** - HTTP proxy backend
 
-**Streaming Architecture:** For large blob support without OOM:
-- ByteStream uploads use bounded channels (4 chunks buffer) for backpressure
-- Data flows directly from gRPC stream to disk without accumulating in RAM
-- Supports blobs of any size (GBs) with constant memory usage
+### Resilient Worker Connection
 
-**Output Streaming (AUDIT-1.3):** For large stdout/stderr from action execution:
-- `OutputHandler` processes stdout/stderr before sending to Bazel
-- Threshold: 1MB (outputs < 1MB are sent inline, ≥ 1MB stored in CAS)
-- Prevents gRPC "message too large" errors and OOM crashes
-- ExecutionResponse contains either inline data or CAS digest
+The worker implements enterprise-grade connection management:
 
-**Future Backends:** The trait-based design allows implementing:
-- `S3Backend` - for cloud deployments
-- `RedisBackend` - for distributed caching
-- `TieredBackend` - hot data in memory, cold data on disk
+- **Adaptive Keepalive** - Adjusts intervals based on network conditions
+- **Exponential Backoff** - Reconnection with jitter and configurable delays
+- **Execution Handoff** - Preserves executions during reconnection
+- **Health Checking** - Bidirectional health checks with timeouts
+- **Connection State Machine** - Tracks states: Disconnected → Connecting → Connected → Ready
 
 ## Environment Variables
 
@@ -347,9 +377,21 @@ FerrisRBE uses a **unified CAS backend** that is shared between `CasService` and
 | `RBE_PORT` | `9092` | Server gRPC port |
 | `RBE_BIND_ADDRESS` | `0.0.0.0` | Bind address |
 | `RUST_LOG` | `info` | Log level (trace/debug/info/warn/error) |
-| `CAS_STORAGE_PATH` | `/data/cas` | Local filesystem path for CAS storage |
 | `CAS_ENDPOINT` | `bazel-remote:9094` | CAS (bazel-remote) endpoint |
 | `REDIS_ENDPOINT` | `redis:6379` | Redis endpoint |
+| `RBE_L1_CACHE_CAPACITY` | `100000` | L1 cache capacity |
+| `RBE_L1_CACHE_TTL_SECS` | `3600` | L1 cache TTL |
+| `RBE_INLINE_OUTPUT_THRESHOLD` | `1048576` | Inline output threshold (1MB) |
+
+### Server HTTP/2 Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RBE_TCP_KEEPALIVE_SECS` | `30` | TCP keepalive probe interval |
+| `RBE_HTTP2_KEEPALIVE_INTERVAL_SECS` | `20` | HTTP/2 PING frame interval |
+| `RBE_HTTP2_KEEPALIVE_TIMEOUT_SECS` | `15` | HTTP/2 PING ACK timeout |
+| `RBE_REQUEST_TIMEOUT_SECS` | `600` | Request timeout (0 = disabled) |
+| `RBE_HTTP2_ADAPTIVE_WINDOW` | `true` | Enable HTTP/2 adaptive flow control |
 
 ### Worker Configuration
 
@@ -363,23 +405,7 @@ FerrisRBE uses a **unified CAS backend** that is shared between `CasService` and
 | `MAX_CONCURRENT` | `4` | Maximum concurrent executions |
 | `WORKDIR` | `/workspace` | Working directory for executions |
 
-### Server Connection Configuration (12-Factor)
-
-Server-side HTTP/2 and gRPC parameters are configurable via environment variables.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RBE_TCP_KEEPALIVE_SECS` | `60` | TCP keepalive probe interval |
-| `RBE_HTTP2_KEEPALIVE_INTERVAL_SECS` | `60` | HTTP/2 PING frame interval |
-| `RBE_HTTP2_KEEPALIVE_TIMEOUT_SECS` | `30` | HTTP/2 PING ACK timeout |
-| `RBE_REQUEST_TIMEOUT_SECS` | `600` | Request timeout (0 = disabled) |
-| `RBE_HTTP2_ADAPTIVE_WINDOW` | `true` | Enable HTTP/2 adaptive flow control |
-
-**Important:** `RBE_HTTP2_KEEPALIVE_INTERVAL_SECS` on the server should be equal to or greater than worker's `RBE_KEEPALIVE_INTERVAL_SECS` to prevent premature connection drops.
-
-### Worker Connection Configuration (12-Factor)
-
-All connection parameters are configurable via environment variables following 12-Factor App principles. This allows infrastructure operators to tune timeouts without code changes.
+### Worker Connection Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -387,19 +413,31 @@ All connection parameters are configurable via environment variables following 1
 | `RBE_MIN_KEEPALIVE_SECS` | `10` | Minimum adaptive keepalive interval |
 | `RBE_MAX_KEEPALIVE_SECS` | `60` | Maximum adaptive keepalive interval |
 | `RBE_KEEPALIVE_TIMEOUT_SECS` | `15` | HTTP/2 keepalive response timeout |
-| `RBE_TCP_KEEPALIVE_SECS` | `30` | TCP keepalive probe interval (should match server) |
+| `RBE_TCP_KEEPALIVE_SECS` | `30` | TCP keepalive probe interval |
 | `RBE_CONNECTION_TIMEOUT_SECS` | `30` | TCP connection timeout |
-| `RBE_MAX_RECONNECT_ATTEMPTS` | `10` | Max reconnection attempts before shutdown |
+| `RBE_MAX_RECONNECT_ATTEMPTS` | `10` | Max reconnection attempts |
 | `RBE_RECONNECT_BASE_DELAY_MS` | `100` | Base delay for exponential backoff |
 | `RBE_RECONNECT_MAX_DELAY_MS` | `30000` | Max delay for exponential backoff |
 | `RBE_RECONNECT_JITTER_FACTOR` | `0.25` | Jitter factor (0.0-1.0) |
-| `RBE_HEALTH_CHECK_INTERVAL_SECS` | `5` | Internal health check interval |
+| `RBE_HEALTH_CHECK_INTERVAL_SECS` | `5` | Health check frequency |
 | `RBE_HEALTH_CHECK_TIMEOUT_SECS` | `3` | Health check timeout |
-| `RBE_EXECUTION_HANDOFF_TIMEOUT_SECS` | `60` | Execution handoff timeout during reconnect |
-| `RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD` | `3` | Threshold for adaptive keepalive adjustment |
+| `RBE_EXECUTION_HANDOFF_TIMEOUT_SECS` | `60` | Execution handoff timeout |
+| `RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD` | `3` | Adaptive adjustment threshold |
 | `RBE_ENABLE_METRICS` | `true` | Enable connection metrics |
+| `RBE_PRINT_CONFIG_OPTIONS` | (unset) | Print all config options on startup |
 
-**Note:** The old "Environment Detector" that magically chose configurations based on detecting Docker Desktop, Kubernetes, or Cloud environments has been removed. All configuration is now explicit via environment variables as per RFC_DYNAMIC_CONFIGURATION.md.
+### Materializer Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RBE_DOWNLOAD_TIMEOUT_SECS` | `300` | Per-file download timeout |
+| `RBE_MAX_CONCURRENT_DOWNLOADS` | `10` | Max concurrent downloads |
+| `RBE_DOWNLOAD_CHUNK_SIZE` | `65536` | Download chunk size (64KB) |
+| `RBE_STREAMING_THRESHOLD` | `4194304` | Streaming threshold (4MB) |
+| `RBE_USE_HARDLINKS` | `true` | Use hardlinks when possible |
+| `RBE_VALIDATE_DIGESTS` | `true` | Validate digests after download |
+
+**Important:** Server HTTP/2 interval/timeout must be >= worker values to prevent connection drops.
 
 ## Code Style Guidelines
 
@@ -429,6 +467,14 @@ All connection parameters are configurable via environment variables following 1
 - Some protocol buffer comments in Spanish (legacy)
 - Doc comments (`///`) for public APIs
 
+### Generated Code
+
+Generated protobuf code in `OUT_DIR` should have clippy suppressions:
+```rust
+#[allow(clippy::doc_lazy_continuation)]
+pub mod proto { ... }
+```
+
 ## Testing Strategy
 
 ### Unit Tests
@@ -457,10 +503,14 @@ Integration tests are in `src/main.rs` under `mod integration_tests`:
 ### Test Commands
 
 ```bash
-# Run all tests
+# Run all Bazel tests
+bazel test //...
+
+# Run all Cargo tests
 cargo test
 
 # Run with verbose output
+bazel test --test_output=all //...
 cargo test -- --nocapture
 
 # Run specific test
@@ -489,98 +539,103 @@ cargo test test_state_machine_full_flow
 
 ## Deployment
 
-### Docker Build
+### Docker Compose
 
 ```bash
-# Build server image
-docker build -t ferrisrbe/server:latest -f Dockerfile .
+# Start all services (uses pre-built images from Docker Hub)
+docker-compose up -d
 
-# Build worker image
-docker build -t ferrisrbe/worker:latest -f Dockerfile.worker .
+# Or build locally with Bazel first, then run
+bazel run //oci:load_all
+docker-compose up -d
 ```
 
-### Kubernetes Resources
+**Note:** docker-compose.yml currently uses image tag `0.1.0-test-amd64`. Update to `latest` after creating a release tag.
 
-The deployment includes:
-1. **Namespace**: `rbe`
-2. **ConfigMap**: Server configuration
-3. **Redis**: Metadata store
-4. **bazel-remote**: CAS storage
-5. **RBE Server**: gRPC API server (replicas: 1)
-6. **RBE Workers**: Auto-scaling worker pool (replicas: 5-100)
+### Railway Deployment (Remote Cache Only)
+
+Deploy the FerrisRBE server to Railway for **Remote Cache** functionality:
+
+```bash
+# Deploy cache-only server
+railway service create ferrisrbe-cache --source .
+```
+
+**⚠️ Limitation:** Railway deployment only provides Remote Cache (Action Cache + CAS). 
+**Remote Execution requires workers** which must be deployed separately using Docker Compose or Kubernetes.
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RBE_PORT` | `${PORT}` | Server port (auto-assigned by Railway) |
+| `RUST_LOG` | `info` | Log level |
+
+**Current Image:** `0.1.0-test-amd64` (update to `latest` after release)
+
+**For Full Remote Execution**, use Docker Compose or Helm locally:
+```bash
+# Local full RBE with workers
+docker-compose up -d
+```
+
+### Helm Deployment (Recommended)
+
+```bash
+# Install with Helm
+helm install ferrisrbe ./charts/ferrisrbe \
+  --namespace rbe \
+  --create-namespace
+
+# With NodePort for local testing
+helm install ferrisrbe ./charts/ferrisrbe \
+  --namespace rbe \
+  --create-namespace \
+  --set server.service.type=NodePort \
+  --set server.service.nodePort=30092
+
+# Upgrade
+helm upgrade ferrisrbe ./charts/ferrisrbe --namespace rbe
+
+# Uninstall
+helm uninstall ferrisrbe --namespace rbe
+```
 
 ### Health Checks
 
-- Server: TCP check on port 9092 (nc -z)
+- Server: TCP check on port 9092
 - Workers: Bidirectional gRPC stream health via heartbeats
+- Liveness/Readiness probes configured in Helm charts
 
-## Conectividad y Acceso Local
+## Connectivity and Local Access
 
-### Opciones de Conectividad
+### NodePort (Recommended for Local Development)
 
-Para desarrollo local con Kubernetes o similares, hay dos opciones para conectar Bazel al cluster:
-
-#### Opción 1: NodePort (RECOMENDADO)
-
-Esta es la opción más estable para conexiones gRPC persistentes.
-
-**Ventajas:**
-- No requiere `kubectl port-forward` corriendo
-- Conexiones gRPC bidireccionales estables
-- No hay timeouts de reconexión
-
-**Puertos expuestos:**
+Puertos expuestos:
 - `localhost:30092` - RBE Server (gRPC)
 - `localhost:30094` - Bazel Remote Cache (gRPC)
-- `localhost:30080` - Bazel Remote HTTP (opcional)
-
-**Configuración:**
-```bash
-# Aplicar servicios NodePort (ya incluido en deploy.sh)
-./scripts/setup-nodeport.sh apply
-
-# Verificar conectividad
-./scripts/setup-nodeport.sh status
-```
-
-**Uso en Bazel:**
-Los ejemplos en `examples/` ya están configurados para usar NodePort.
+- `localhost:30080` - Bazel Remote HTTP (optional)
 
 ```bash
-cd examples/bazel-7.4
-bazel build //...              # Cache-only (default)
-bazel build --config=k8s //...  # Con remote execution
+# Check connectivity
+nc -zv localhost 30092
+nc -zv localhost 30094
 ```
 
-#### Opción 2: kubectl port-forward
+### Bazel Configuration
 
-Alternativa si NodePort no está disponible.
+Add to your `.bazelrc`:
 
-**Desventajas:**
-- Requiere mantener procesos corriendo
-- Puede tener timeouts con gRPC streaming
-- Reconexiones frecuentes
-
-**Configuración:**
 ```bash
-# Terminal 1
-kubectl port-forward -n rbe svc/rbe-server 9092:9092
+# Remote Cache
+build:remote-cache --remote_cache=grpc://localhost:30092
+build:remote-cache --remote_upload_local_results=true
 
-# Terminal 2
-kubectl port-forward -n rbe svc/bazel-remote 9094:9094
+# Remote Execution
+build:remote-exec --config=remote-cache
+build:remote-exec --remote_executor=grpc://localhost:30092
+build:remote-exec --remote_default_exec_properties=OSFamily=linux
 ```
-
-**Uso en Bazel:**
-Editar `.bazelrc` y cambiar los puertos de 30092/30094 a 9092/9094.
-
-### Troubleshooting de Conectividad
-
-| Problema | Causa | Solución |
-|----------|-------|----------|
-| `UNAVAILABLE: io exception` | Puerto no accesible | Verificar NodePort: `nc -zv localhost 30092` |
-| `connection refused` | Pods no listos | Esperar a que todos los pods estén Running |
-| Workers reconectando | Health check agresivo | Normal, se reconectan automáticamente |
-| Timeout en builds | gRPC inestable | Usar NodePort en lugar de port-forward |
 
 ## Troubleshooting
 
@@ -601,6 +656,13 @@ grpcurl -plaintext localhost:9092 build.bazel.remote.execution.v2.Capabilities/G
 kubectl logs -n rbe -l app=rbe-server --tail=50
 ```
 
+### HTTP/2 Connection Drops
+
+If you see "error reading a body from connection":
+1. Ensure server keepalive interval >= worker keepalive interval
+2. Check that `RBE_HTTP2_KEEPALIVE_INTERVAL_SECS` on server >= `RBE_KEEPALIVE_INTERVAL_SECS` on worker
+3. Verify TCP keepalive settings match on both sides
+
 ### Bazel Hangs on "remote"
 
 - Verify workers are registered: `kubectl logs -n rbe -l app=rbe-server | grep "Worker registration"`
@@ -610,9 +672,9 @@ kubectl logs -n rbe -l app=rbe-server --tail=50
 ### Large Output / "Message too large" Errors
 
 The OutputHandler automatically handles large stdout/stderr:
-- **Threshold:** 1MB (outputs ≥ 1MB are stored in CAS)
+- **Threshold:** 1MB (outputs >= 1MB are stored in CAS)
 - **Verify handling:** Check server logs for "Output ... is large" or "Stored ... output in CAS"
-- **CAS storage:** Large outputs are stored in `/data/cas` with content-addressed paths
+- **CAS storage:** Large outputs are stored in bazel-remote
 - **gRPC limit:** Tonic default is 4MB; OutputHandler prevents exceeding this
 
 ## Protocol Buffer APIs
@@ -657,124 +719,79 @@ Bidirectional streaming for worker management:
 ### Modifying Worker Protocol
 
 1. Update `proto/worker.proto`
-2. Regenerate code: `cargo build`
+2. Regenerate code: `cargo build` or `bazel build //...`
 3. Update both server (`src/server/worker_service.rs`) and worker (`src/bin/worker.rs`)
 
-## Bazel Configuration
+### Adding a New CAS Backend
 
-### Estructura del módulo
+1. Implement `CasBackend` trait in `src/cas/backends/<name>.rs`
+2. Add to `src/cas/backends/mod.rs`
+3. Update `RbeServer::new()` in `src/server/mod.rs` to use the new backend if needed
 
-El proyecto usa **bzlmod** (Bazel Modules) para gestionar dependencias:
+## Bazel Configuration Reference
 
-| Archivo | Propósito |
-|---------|-----------|
-| `MODULE.bazel` | Define dependencias del módulo y extensiones |
-| `.bazelversion` | Versión exacta de Bazel (8.3.0) |
-| `.bazelrc` | Configuraciones de build, flags por defecto |
-| `BUILD.bazel` | Targets de Rust (binarios y librerías) |
-| `oci/BUILD.bazel` | Definiciones de imágenes de contenedor |
+### Module Structure
 
-### Dependencias principales (MODULE.bazel)
+The project uses **bzlmod** (Bazel Modules) for dependency management:
 
-```starlark
-# Reglas de Rust
-bazel_dep(name = "rules_rust", version = "0.57.1")
+| File | Purpose |
+|------|---------|
+| `MODULE.bazel` | Define module dependencies and extensions |
+| `.bazelversion` | Exact Bazel version (8.3.0) |
+| `.bazelrc` | Build configurations, default flags |
+| `BUILD.bazel` | Rust targets (binaries and libraries) |
+| `oci/BUILD.bazel` | Container image definitions |
 
-# Protobuf y gRPC
-bazel_dep(name = "rules_proto", version = "7.1.0")
-bazel_dep(name = "protobuf", version = "29.3")
-
-# Imágenes de contenedor
-bazel_dep(name = "rules_oci", version = "2.2.3")
-bazel_dep(name = "aspect_bazel_lib", version = "2.14.0")
-```
-
-### Gestión de dependencias Rust
-
-Usamos `crate_universe` con el modo `from_cargo`:
-
-```starlark
-crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
-
-crate.from_cargo(
-    name = "crates",
-    cargo_lockfile = "//:Cargo.lock",
-    manifests = ["//:Cargo.toml"],
-)
-
-use_repo(crate, "crates")
-```
-
-Esto mantiene **Cargo.toml como fuente única de verdad** para las dependencias Rust.
-
-### Comandos útiles de Bazel
+### Useful Bazel Commands
 
 ```bash
-# Ver dependencias del módulo
+# View module dependencies
 bazel mod deps
 
-# Ver graph de dependencias
+# View dependency graph
 bazel mod graph
 
-# Sincronizar crates (cuando cambia Cargo.toml/Cargo.lock)
+# Sync crates (when Cargo.toml/Cargo.lock changes)
 CARGO_BAZEL_REPIN=1 bazel sync --only=crates
 
-# Ver todos los targets
+# View all targets
 bazel query //...
 
-# Ver dependencias de un target
+# View dependencies of a target
 bazel query 'deps(//:rbe-server)'
 
-# Build con profiling
+# Build with profiling
 bazel build --profile=/tmp/profile.gz //...
 bazel analyze-profile /tmp/profile.gz
 
 # Clean
 bazel clean
-bazel clean --expunge  # Limpieza completa
+bazel clean --expunge  # Full cleanup
 ```
 
-### Configuraciones disponibles (.bazelrc)
+### Available Configurations (.bazelrc)
 
-| Configuración | Descripción |
+| Configuration | Description |
 |---------------|-------------|
-| `--config=release` | Build optimizado para producción |
-| `--config=dev` | Build rápido para desarrollo |
-| `--config=debug` | Build con símbolos de debugging |
-| `--config=ci` | Configuración para CI/CD |
-| `--config=arm64` | Cross-compilación para ARM64 |
+| `--config=release` | Optimized production build |
+| `--config=dev` | Fast development build |
+| `--config=debug` | Debug build with symbols |
+| `--config=ci` | CI/CD configuration |
+| `--config=linux_amd64` | Cross-compile for AMD64 |
+| `--config=arm64` | Cross-compile for ARM64 |
 
-## Referencias
+## Documentation
 
-## Recent Architecture Changes
+Full documentation is available in the `docs/` directory:
 
-### AUDIT-1.1: Unified CAS Backend (Completed)
-
-**Problem:** `CasService` and `ByteStreamService` had separate storage implementations, causing inconsistency.
-
-**Solution:** 
-- Created `CasBackend` trait in `src/cas/mod.rs`
-- Implemented `DiskBackend` for filesystem storage
-- Both services now share `Arc<dyn CasBackend>`
-
-### AUDIT-1.3: Output Streaming to CAS (Completed)
-
-**Problem:** Large stdout/stderr (>4MB) caused gRPC "message too large" errors and OOM crashes.
-
-**Solution:**
-- Created `OutputHandler` in `src/execution/output_handler.rs`
-- Threshold: 1MB (outputs ≥ 1MB stored in CAS, digest returned)
-- ExecutionResponse contains either inline data or CAS digest
-- Prevents gRPC message size exceeded errors
-
-### AUDIT-2.3: ByteStream Streaming (Completed)
-
-**Problem:** ByteStream uploads accumulated entire blob in memory before writing to disk.
-
-**Solution:**
-- Bounded channel (4 chunks) for backpressure
-- Streaming write from gRPC to disk without RAM accumulation
-- Constant memory usage (~256KB) regardless of blob size
+- `docs/architecture.md` - System design and components
+- `docs/deployment.md` - Kubernetes, Helm, and Docker deployment
+- `docs/configuration.md` - Environment variables and tuning
+- `docs/bazel-integration.md` - `.bazelrc` configuration
+- `docs/api.md` - REAPI v2.4 endpoints
+- `docs/monitoring.md` - Metrics and logging
+- `docs/troubleshooting.md` - Common issues and solutions
+- `docs/project-structure.md` - Codebase orientation
 
 ## References
 
