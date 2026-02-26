@@ -1,0 +1,112 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "name": "FerrisRBE - Full Remote Build Execution",
+  "description": "High-performance RBE server for Bazel with Remote Cache and Remote Execution. Includes CAS storage, Redis metadata store, RBE server, and workers.",
+  "icon": "https://bazel.build/images/bazel-icon.svg",
+  "author": "xangcastle",
+  "services": {
+    "bazel-remote": {
+      "image": "buchgr/bazel-remote-cache:latest",
+      "variables": {
+        "BAZEL_REMOTE_DIR": {
+          "default": "/data",
+          "description": "Directory for CAS storage"
+        },
+        "BAZEL_REMOTE_MAX_SIZE": {
+          "default": "5",
+          "description": "Maximum cache size in GB"
+        }
+      },
+      "volumes": ["/data"]
+    },
+    "redis": {
+      "image": "redis:7-alpine",
+      "variables": {
+        "REDIS_ARGS": {
+          "default": "--appendonly yes",
+          "description": "Redis startup arguments"
+        }
+      }
+    },
+    "ferrisrbe-server": {
+      "image": "xangcastle/ferris-server:latest",
+      "variables": {
+        "RBE_PORT": {
+          "default": "${PORT}",
+          "description": "Server port (auto-assigned by Railway)"
+        },
+        "RBE_BIND_ADDRESS": {
+          "default": "0.0.0.0",
+          "description": "Bind address for server"
+        },
+        "RUST_LOG": {
+          "default": "info",
+          "description": "Log level (trace/debug/info/warn/error)"
+        },
+        "CAS_ENDPOINT": {
+          "default": "bazel-remote:9092",
+          "description": "CAS (bazel-remote) endpoint - uses port 9092"
+        },
+        "REDIS_ENDPOINT": {
+          "default": "redis:6379",
+          "description": "Redis endpoint"
+        },
+        "RBE_L1_CACHE_CAPACITY": {
+          "default": "100000",
+          "description": "L1 action cache capacity"
+        },
+        "RBE_TLS_CERT": {
+          "default": "",
+          "description": "TLS certificate (PEM) - leave empty for plaintext"
+        },
+        "RBE_TLS_KEY": {
+          "default": "",
+          "description": "TLS private key (PEM) - leave empty for plaintext"
+        }
+      },
+      "healthcheck": {
+        "path": "/health",
+        "timeout": 100
+      },
+      "dependsOn": ["bazel-remote", "redis"]
+    },
+    "ferrisrbe-worker": {
+      "image": "xangcastle/ferris-worker:latest",
+      "variables": {
+        "WORKER_ID": {
+          "default": "railway-worker",
+          "description": "Unique worker identifier"
+        },
+        "SERVER_ENDPOINT": {
+          "default": "http://ferrisrbe-server:9092",
+          "description": "RBE server endpoint"
+        },
+        "CAS_ENDPOINT": {
+          "default": "http://bazel-remote:9092",
+          "description": "CAS endpoint - uses port 9092"
+        },
+        "RUST_LOG": {
+          "default": "info",
+          "description": "Log level"
+        },
+        "MAX_CONCURRENT": {
+          "default": "4",
+          "description": "Maximum concurrent executions per worker"
+        },
+        "WORKER_TYPE": {
+          "default": "default",
+          "description": "Worker type (default, highcpu, gpu)"
+        },
+        "WORKER_LABELS": {
+          "default": "os=linux,arch=amd64",
+          "description": "Worker labels for action matching"
+        }
+      },
+      "dependsOn": ["ferrisrbe-server"],
+      "restart": {
+        "policy": "ON_FAILURE",
+        "maxRetries": 10
+      }
+    }
+  }
+}

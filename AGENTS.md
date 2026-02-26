@@ -382,6 +382,8 @@ The worker implements enterprise-grade connection management:
 | `RBE_L1_CACHE_CAPACITY` | `100000` | L1 cache capacity |
 | `RBE_L1_CACHE_TTL_SECS` | `3600` | L1 cache TTL |
 | `RBE_INLINE_OUTPUT_THRESHOLD` | `1048576` | Inline output threshold (1MB) |
+| `RBE_TLS_CERT` | - | TLS certificate (PEM format) for gRPC over TLS |
+| `RBE_TLS_KEY` | - | TLS private key (PEM format) for gRPC over TLS |
 
 ### Server HTTP/2 Configuration
 
