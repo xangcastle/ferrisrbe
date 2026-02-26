@@ -149,10 +149,18 @@ oci_image_index(
     visibility = ["//visibility:public"],
 )
 
-# Target principal para cargar en Docker el servidor (amd64 por defecto para Mac local o linux)
+# Target principal para cargar en Docker el servidor (ARM64 para Mac local)
 oci_load(
     name = "server_load",
-    image = ":server_image_arm64", # Recomendado para uso local en Mac Apple Silicon
+    image = ":server_image_arm64",
+    repo_tags = ["ferrisrbe/server:latest"],
+    visibility = ["//visibility:public"],
+)
+
+# Target para cargar imagen AMD64 (para Linux/CI)
+oci_load(
+    name = "server_load_amd64",
+    image = ":server_image_amd64",
     repo_tags = ["ferrisrbe/server:latest"],
     visibility = ["//visibility:public"],
 )
@@ -167,10 +175,18 @@ oci_image_index(
     visibility = ["//visibility:public"],
 )
 
-# Target principal para cargar en Docker el worker
+# Target principal para cargar en Docker el worker (ARM64 para Mac local)
 oci_load(
     name = "worker_load",
     image = ":worker_image_arm64",
+    repo_tags = ["ferrisrbe/worker:latest"],
+    visibility = ["//visibility:public"],
+)
+
+# Target para cargar imagen AMD64 (para Linux/CI)
+oci_load(
+    name = "worker_load_amd64",
+    image = ":worker_image_amd64",
     repo_tags = ["ferrisrbe/worker:latest"],
     visibility = ["//visibility:public"],
 )

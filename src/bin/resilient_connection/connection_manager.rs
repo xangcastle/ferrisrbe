@@ -81,7 +81,11 @@ pub enum ConnectionEvent {
     /// Connection lost, will attempt reconnection
     Disconnected { reason: String },
     /// Reconnection attempt started
-    Reconnecting { attempt: u32, max_attempts: u32, delay_ms: u64 },
+    Reconnecting {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+    },
     /// Maximum reconnection attempts exceeded
     Failed { reason: String },
     /// Health check succeeded
@@ -116,7 +120,7 @@ pub struct ConnectionManager {
 impl ConnectionManager {
     pub fn new(config: ConnectionConfig) -> Self {
         let (event_tx, event_rx) = mpsc::channel(100);
-        
+
         let adaptive_keepalive = AdaptiveKeepalive::new(
             config.initial_keepalive_interval_secs,
             config.min_keepalive_interval_secs,
@@ -251,13 +255,13 @@ impl ConnectionManager {
     /// Calculate next reconnection delay with exponential backoff and jitter
     pub async fn next_reconnect_delay(&self) -> Duration {
         let attempt = *self.reconnect_attempts.read().await;
-        
+
         let base_delay = self.config.reconnect_base_delay_ms;
         let max_delay = self.config.reconnect_max_delay_ms;
-        
+
         let exponential_delay = base_delay * (1_u64 << attempt.min(10));
         let capped_delay = exponential_delay.min(max_delay);
-        
+
         let jitter_range = (capped_delay as f64 * self.config.reconnect_jitter_factor) as u64;
         let jitter = if jitter_range > 0 {
             let r = fastrand::u64(0..(jitter_range * 2));
@@ -265,9 +269,9 @@ impl ConnectionManager {
         } else {
             0
         };
-        
+
         let final_delay = (capped_delay as i64 + jitter).max(0) as u64;
-        
+
         Duration::from_millis(final_delay)
     }
 
@@ -275,9 +279,9 @@ impl ConnectionManager {
     pub async fn increment_reconnect_attempt(&self) {
         let mut attempts = self.reconnect_attempts.write().await;
         *attempts += 1;
-        
+
         let delay = self.next_reconnect_delay().await;
-        
+
         let _ = self
             .event_tx
             .send(ConnectionEvent::Reconnecting {
@@ -324,7 +328,7 @@ impl ConnectionManager {
     pub async fn record_health_check_failure(&self, reason: String) {
         let mut keepalive = self.adaptive_keepalive.write().await;
         let mut metrics = self.metrics.write().await;
-        
+
         keepalive.record_failure();
         metrics.record_failed_health_check();
 
@@ -364,7 +368,10 @@ impl ConnectionManager {
             .await;
 
         if count > 0 {
-            info!("Successfully handed off {} executions after reconnection", count);
+            info!(
+                "Successfully handed off {} executions after reconnection",
+                count
+            );
         }
     }
 }
@@ -390,16 +397,15 @@ pub struct ConnectionStats {
     pub average_connection_duration_secs: f64,
 }
 
-
 /// Configuration loader with environment variable support
-/// 
+///
 /// All connection parameters can be configured via environment variables.
 /// This follows the pattern from buildfarm's PR #2494.
 pub struct ConfigLoader;
 
 impl ConfigLoader {
     /// Load configuration from environment variables with sensible defaults
-    /// 
+    ///
     /// All RBE_* environment variables are read and applied over the defaults.
     /// This follows 12-Factor App principles for configuration.
     pub fn load() -> ConnectionConfig {
@@ -407,7 +413,8 @@ impl ConfigLoader {
 
         let config = Self::load_from_env();
 
-        info!("Configuration loaded: keepalive={}s, timeout={}s, max_reconnects={}",
+        info!(
+            "Configuration loaded: keepalive={}s, timeout={}s, max_reconnects={}",
             config.initial_keepalive_interval_secs,
             config.connection_timeout_secs,
             config.max_reconnect_attempts
@@ -418,58 +425,37 @@ impl ConfigLoader {
 
     fn load_from_env() -> ConnectionConfig {
         ConnectionConfig {
-            initial_keepalive_interval_secs: Self::parse_env_u64(
-                "RBE_KEEPALIVE_INTERVAL_SECS", 20
-            ),
-            min_keepalive_interval_secs: Self::parse_env_u64(
-                "RBE_MIN_KEEPALIVE_SECS", 10
-            ),
-            max_keepalive_interval_secs: Self::parse_env_u64(
-                "RBE_MAX_KEEPALIVE_SECS", 60
-            ),
-            keepalive_timeout_secs: Self::parse_env_u64(
-                "RBE_KEEPALIVE_TIMEOUT_SECS", 15
-            ),
-            tcp_keepalive_secs: Self::parse_env_u64(
-                "RBE_TCP_KEEPALIVE_SECS", 30
-            ),
-            connection_timeout_secs: Self::parse_env_u64(
-                "RBE_CONNECTION_TIMEOUT_SECS", 30
-            ),
-            max_reconnect_attempts: Self::parse_env_u32(
-                "RBE_MAX_RECONNECT_ATTEMPTS", 10
-            ),
-            reconnect_base_delay_ms: Self::parse_env_u64(
-                "RBE_RECONNECT_BASE_DELAY_MS", 100
-            ),
-            reconnect_max_delay_ms: Self::parse_env_u64(
-                "RBE_RECONNECT_MAX_DELAY_MS", 30000
-            ),
-            reconnect_jitter_factor: Self::parse_env_f64(
-                "RBE_RECONNECT_JITTER_FACTOR", 0.25
-            ),
-            health_check_interval_secs: Self::parse_env_u64(
-                "RBE_HEALTH_CHECK_INTERVAL_SECS", 5
-            ),
-            health_check_timeout_secs: Self::parse_env_u64(
-                "RBE_HEALTH_CHECK_TIMEOUT_SECS", 3
-            ),
+            initial_keepalive_interval_secs: Self::parse_env_u64("RBE_KEEPALIVE_INTERVAL_SECS", 20),
+            min_keepalive_interval_secs: Self::parse_env_u64("RBE_MIN_KEEPALIVE_SECS", 10),
+            max_keepalive_interval_secs: Self::parse_env_u64("RBE_MAX_KEEPALIVE_SECS", 60),
+            keepalive_timeout_secs: Self::parse_env_u64("RBE_KEEPALIVE_TIMEOUT_SECS", 15),
+            tcp_keepalive_secs: Self::parse_env_u64("RBE_TCP_KEEPALIVE_SECS", 30),
+            connection_timeout_secs: Self::parse_env_u64("RBE_CONNECTION_TIMEOUT_SECS", 30),
+            max_reconnect_attempts: Self::parse_env_u32("RBE_MAX_RECONNECT_ATTEMPTS", 10),
+            reconnect_base_delay_ms: Self::parse_env_u64("RBE_RECONNECT_BASE_DELAY_MS", 100),
+            reconnect_max_delay_ms: Self::parse_env_u64("RBE_RECONNECT_MAX_DELAY_MS", 30000),
+            reconnect_jitter_factor: Self::parse_env_f64("RBE_RECONNECT_JITTER_FACTOR", 0.25),
+            health_check_interval_secs: Self::parse_env_u64("RBE_HEALTH_CHECK_INTERVAL_SECS", 5),
+            health_check_timeout_secs: Self::parse_env_u64("RBE_HEALTH_CHECK_TIMEOUT_SECS", 3),
             execution_handoff_timeout_secs: Self::parse_env_u64(
-                "RBE_EXECUTION_HANDOFF_TIMEOUT_SECS", 60
+                "RBE_EXECUTION_HANDOFF_TIMEOUT_SECS",
+                60,
             ),
             adaptive_adjustment_threshold: Self::parse_env_u32(
-                "RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD", 3
+                "RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD",
+                3,
             ),
-            enable_metrics: Self::parse_env_bool(
-                "RBE_ENABLE_METRICS", true
-            ),
+            enable_metrics: Self::parse_env_bool("RBE_ENABLE_METRICS", true),
         }
     }
 
     fn parse_env_u64(var: &str, default: u64) -> u64 {
         match env::var(var) {
             Ok(val) => val.parse::<u64>().unwrap_or_else(|_| {
-                warn!("Invalid value for {}: '{}', using default {}", var, val, default);
+                warn!(
+                    "Invalid value for {}: '{}', using default {}",
+                    var, val, default
+                );
                 default
             }),
             Err(_) => default,
@@ -479,7 +465,10 @@ impl ConfigLoader {
     fn parse_env_u32(var: &str, default: u32) -> u32 {
         match env::var(var) {
             Ok(val) => val.parse::<u32>().unwrap_or_else(|_| {
-                warn!("Invalid value for {}: '{}', using default {}", var, val, default);
+                warn!(
+                    "Invalid value for {}: '{}', using default {}",
+                    var, val, default
+                );
                 default
             }),
             Err(_) => default,
@@ -489,7 +478,10 @@ impl ConfigLoader {
     fn parse_env_f64(var: &str, default: f64) -> f64 {
         match env::var(var) {
             Ok(val) => val.parse::<f64>().unwrap_or_else(|_| {
-                warn!("Invalid value for {}: '{}', using default {}", var, val, default);
+                warn!(
+                    "Invalid value for {}: '{}', using default {}",
+                    var, val, default
+                );
                 default
             }),
             Err(_) => default,
@@ -502,7 +494,10 @@ impl ConfigLoader {
                 "true" | "1" | "yes" => true,
                 "false" | "0" | "no" => false,
                 _ => {
-                    warn!("Invalid value for {}: '{}', using default {}", var, val, default);
+                    warn!(
+                        "Invalid value for {}: '{}', using default {}",
+                        var, val, default
+                    );
                     default
                 }
             },

@@ -9,7 +9,7 @@ entries:
     description: FerrisRBE - Remote Build Execution for Bazel
     digest: f48b4b882222ccdee1e3d5c868f3e406ff1526369586f5045f55324fa6cc813d
     home: https://github.com/abel/ferrisrbe
-    icon: https://raw.githubusercontent.com/juhd/ferrisrbe/main/docs/assets/logo.png
+    icon: https://raw.githubusercontent.com/xangcastle/ferrisrbe/main/docs/assets/logo.png
     keywords:
     - bazel
     - remote-execution

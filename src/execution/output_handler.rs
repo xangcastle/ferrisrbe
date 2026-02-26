@@ -133,9 +133,7 @@ impl OutputHandler {
                 "Output {} exceeds maximum capture size ({} > {}), truncating",
                 name, size, max_capture
             );
-            return self
-                .truncate_and_store(name, data, max_capture)
-                .await;
+            return self.truncate_and_store(name, data, max_capture).await;
         }
 
         if size < inline_threshold {
@@ -154,11 +152,7 @@ impl OutputHandler {
     }
 
     /// Store output in CAS and return digest
-    async fn store_in_cas(
-        &self,
-        name: &str,
-        data: Vec<u8>,
-    ) -> Result<OutputResult, CasError> {
+    async fn store_in_cas(&self, name: &str, data: Vec<u8>) -> Result<OutputResult, CasError> {
         let digest = DigestInfo::from_bytes(&data);
         let size = data.len();
 
@@ -174,9 +168,7 @@ impl OutputHandler {
             return Ok(OutputResult::stored(digest));
         }
 
-        self.cas_backend
-            .write(&digest, Bytes::from(data))
-            .await?;
+        self.cas_backend.write(&digest, Bytes::from(data)).await?;
 
         info!(
             "Stored {} output in CAS: digest={}, size={}",
@@ -229,21 +221,27 @@ impl OutputHandler {
     /// # Returns
     /// * Raw output data
     #[allow(dead_code)]
-    pub async fn retrieve_output(
-        &self,
-        result: &OutputResult,
-    ) -> Result<Vec<u8>, CasError> {
+    pub async fn retrieve_output(&self, result: &OutputResult) -> Result<Vec<u8>, CasError> {
         if let Some(ref data) = result.raw {
             return Ok(data.clone());
         }
 
         if let Some(ref digest) = result.digest {
-            debug!("Retrieving output from CAS: digest={}", digest.hash_to_string());
+            debug!(
+                "Retrieving output from CAS: digest={}",
+                digest.hash_to_string()
+            );
             match self.cas_backend.read(digest).await? {
                 Some(data) => Ok(data.to_vec()),
                 None => {
-                    warn!("Output not found in CAS: digest={}", digest.hash_to_string());
-                    Ok(format!("[Output not found in CAS: {}]", digest.hash_to_string()).into_bytes())
+                    warn!(
+                        "Output not found in CAS: digest={}",
+                        digest.hash_to_string()
+                    );
+                    Ok(
+                        format!("[Output not found in CAS: {}]", digest.hash_to_string())
+                            .into_bytes(),
+                    )
                 }
             }
         } else {
@@ -265,7 +263,10 @@ mod tests {
         let handler = OutputHandler::new(backend);
 
         let data = b"small output".to_vec();
-        let result = handler.process_output("stdout", data.clone()).await.unwrap();
+        let result = handler
+            .process_output("stdout", data.clone())
+            .await
+            .unwrap();
 
         assert!(result.is_inline());
         assert_eq!(result.raw, Some(data));
