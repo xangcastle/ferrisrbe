@@ -6,7 +6,7 @@
 # Deploy: railway service create ferrisrbe-cache --source railway
 
 [deploy]
-image = "xangcastle/ferris-server:0.1.0-test-amd64"
+image = "xangcastle/ferris-server:latest"
 startCommand = "/app/rbe_server"
 healthcheckPath = "/health"
 healthcheckTimeout = 100

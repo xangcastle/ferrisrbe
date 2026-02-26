@@ -34,7 +34,7 @@ Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ m
 
 Deploy a managed Remote Cache instance with one click. Free tier available.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/ferrisrbe)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/mhjSM1?referralCode=yQR-JU)
 
 ```bash
 # Or use CLI
