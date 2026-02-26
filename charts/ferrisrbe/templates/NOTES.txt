@@ -42,4 +42,4 @@ build:remote-exec --remote_default_exec_properties=container-image=
 
 ## Documentation
 
-For more information, visit: https://github.com/juhd/ferrisrbe
+For more information, visit: https://github.com/xangcastle/ferrisrbe
