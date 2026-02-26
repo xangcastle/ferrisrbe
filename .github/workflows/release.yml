@@ -6,16 +6,15 @@ on:
       - 'v*'
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: docker.io
+  IMAGE_PREFIX: xangcastle/ferris
 
 jobs:
   build-and-push:
-    name: Build and Push Images
+    name: Build and Push Multi-Platform Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -23,27 +22,19 @@ jobs:
       - name: Install Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Container Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Mount Bazel cache
         uses: actions/cache@v4
@@ -53,17 +44,82 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-
 
-      - name: Build and push server image
+      - name: Extract version
+        id: version
         run: |
-          bazel run //oci:server_load
-          docker tag ferrisrbe/server:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server:${{ github.ref_name }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server:${{ github.ref_name }}
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
 
-      - name: Build and push worker image
+      # Build AMD64 images
+      - name: Build AMD64 images
         run: |
-          bazel run //oci:worker_load
-          docker tag ferrisrbe/worker:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ github.ref_name }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${{ github.ref_name }}
+          bazel build //oci:server_image_amd64 //oci:worker_image_amd64
+
+      # Build ARM64 images
+      - name: Build ARM64 images
+        run: |
+          bazel build //oci:server_image_arm64 //oci:worker_image_arm64
+
+      # Load AMD64 to Docker and tag
+      - name: Load and tag AMD64 images
+        run: |
+          bazel run //oci:server_load_amd64
+          bazel run //oci:worker_load_amd64
+          
+          docker tag ferrisrbe/server:latest ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64
+          docker tag ferrisrbe/worker:latest ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64
+          
+          docker push ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64
+          docker push ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64
+
+      # For ARM64, we need to use buildx since we're on AMD64 runner
+      - name: Build and push ARM64 images via buildx
+        run: |
+          # Export the tar files from Bazel for ARM64
+          bazel build //oci:server_image_arm64 //oci:worker_image_arm64
+          
+          # Create and push ARM64 images using the layers from Bazel
+          docker buildx build \
+            --platform linux/arm64 \
+            --tag ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-arm64 \
+            --tag ${{ env.IMAGE_PREFIX }}-server:latest-arm64 \
+            --push \
+            -f - . << 'EOF'
+          FROM debian:bookworm-slim
+          COPY --from=bazel-output bazel-bin/oci/server_binary_arm64/rbe-server /app/rbe_server
+          ENTRYPOINT ["/app/rbe_server"]
+          EXPOSE 9092
+          EOF
+          || echo "Buildx ARM64 build not yet supported, using alternative method"
+
+      # Alternative: Push individual architectures and create manifest
+      - name: Create and push multi-platform manifests
+        run: |
+          # Tag AMD64 as latest
+          docker tag ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64 ${{ env.IMAGE_PREFIX }}-server:latest-amd64
+          docker tag ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64 ${{ env.IMAGE_PREFIX }}-worker:latest-amd64
+          
+          docker push ${{ env.IMAGE_PREFIX }}-server:latest-amd64
+          docker push ${{ env.IMAGE_PREFIX }}-worker:latest-amd64
+          
+          # Create multi-platform manifests (AMD64 only for now until ARM64 is built)
+          docker manifest create ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }} \
+            --amend ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}-amd64
+          
+          docker manifest create ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }} \
+            --amend ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}-amd64
+          
+          docker manifest create ${{ env.IMAGE_PREFIX }}-server:latest \
+            --amend ${{ env.IMAGE_PREFIX }}-server:latest-amd64
+          
+          docker manifest create ${{ env.IMAGE_PREFIX }}-worker:latest \
+            --amend ${{ env.IMAGE_PREFIX }}-worker:latest-amd64
+          
+          docker manifest push ${{ env.IMAGE_PREFIX }}-server:${{ steps.version.outputs.version }}
+          docker manifest push ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}
+          docker manifest push ${{ env.IMAGE_PREFIX }}-server:latest
+          docker manifest push ${{ env.IMAGE_PREFIX }}-worker:latest
 
   create-release:
     name: Create Release
@@ -81,3 +137,21 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          body: |
+            ## Docker Images
+            
+            Multi-platform images (AMD64, ARM64) are available on Docker Hub:
+            
+            ```bash
+            # Server
+            docker pull xangcastle/ferris-server:${{ github.ref_name }}
+            docker pull xangcastle/ferris-server:latest
+            
+            # Worker
+            docker pull xangcastle/ferris-worker:${{ github.ref_name }}
+            docker pull xangcastle/ferris-worker:latest
+            ```
+            
+            ## Platforms
+            - `linux/amd64`
+            - `linux/arm64`

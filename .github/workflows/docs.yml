@@ -37,8 +37,8 @@ jobs:
       - name: Prepare docs for GitHub Pages
         run: |
           mkdir -p _site
-          cp -r docs/* _site/ 2>/dev/null || true
-          echo "<meta http-equiv=\"refresh\" content=\"0;url=./docs/\">" > _site/index.html
+          cp -r target/doc/* _site/ 2>/dev/null || true
+          echo "<meta http-equiv=\"refresh\" content=\"0;url=./rbe_server/\">" > _site/index.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
