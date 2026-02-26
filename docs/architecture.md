@@ -112,6 +112,14 @@ Workers maintain persistent bidirectional gRPC streams with the server:
 - **Work Assignment**: Server pushes work to available workers
 - **Result Streaming**: Workers stream execution results back
 
+### Persistent Worker Protocol Compliance
+
+FerrisRBE fully implements Bazel's formal Persistent Worker protocol. Rather than simply recycling execution containers, FerrisRBE workers function as standard wrappers communicating via `stdin` and `stdout` using the `WorkRequest` and `WorkResponse` protocol buffers. This protocol compliance enables long-term retention of compiler state (such as warm JVMs and Abstract Syntax Trees) for sub-second incremental builds.
+
+### Worker Sandboxing and Volume Mounting
+
+FerrisRBE highly optimizes volume mounts using system hard links (`hard links`) to avoid deep copies and degrade gracefully. When enabling Bazel's `worker_sandboxing` directive, FerrisRBE actively bridges this separation. The hard link optimizations are safely bounded within the Sandbox namespace, preventing persistent workers from leaking internal compiler state through the filesystem while still offering maximum I/O performance.
+
 ## Related
 
 - [Project Structure](./project-structure.md)
