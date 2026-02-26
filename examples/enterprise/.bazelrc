@@ -8,7 +8,10 @@ build --symlink_prefix=/
 # ============================================
 # Remote Cache (funciona desde cualquier SO)
 # ============================================
-build:remote-cache --remote_cache=grpc://localhost:30094
+# Railway Public Remote Cache
+build:remote-cache --remote_cache=grpcs://ferrisrbe-server-production.up.railway.app
+# Local development (NodePort)
+# build:remote-cache --remote_cache=grpc://localhost:30094
 build:remote-cache --remote_upload_local_results=true
 build:remote-cache --remote_timeout=600
 
@@ -16,7 +19,10 @@ build:remote-cache --remote_timeout=600
 # Remote Execution (requiere toolchains Linux)
 # ============================================
 build:remote-exec --config=remote-cache
-build:remote-exec --remote_executor=grpc://localhost:30092
+# Railway Public Remote Executor
+build:remote-exec --remote_executor=grpcs://ferrisrbe-server-production.up.railway.app
+# Local development (NodePort)
+# build:remote-exec --remote_executor=grpc://localhost:30092
 
 # Platform for remote execution
 build:remote-exec --extra_execution_platforms=//toolchains:linux_arm64

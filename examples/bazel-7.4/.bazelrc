@@ -7,7 +7,10 @@ build --symlink_prefix=/
 # ============================================
 # Remote Cache Configuration (NodePort)
 # ============================================
-build:remote-cache --remote_cache=grpc://localhost:9094
+# Railway Public Remote Cache
+build:remote-cache --remote_cache=grpcs://ferrisrbe-server-production.up.railway.app
+# Local development (NodePort)
+# build:remote-cache --remote_cache=grpc://localhost:9094
 build:remote-cache --remote_upload_local_results=true
 build:remote-cache --remote_timeout=300
 
@@ -15,6 +18,9 @@ build:remote-cache --remote_timeout=300
 # Remote Execution Configuration (NodePort)
 # ============================================
 build:remote-exec --config=remote-cache
-build:remote-exec --remote_executor=grpc://localhost:9092
+# Railway Public Remote Executor
+build:remote-exec --remote_executor=grpcs://ferrisrbe-server-production.up.railway.app
+# Local development (NodePort)
+# build:remote-exec --remote_executor=grpc://localhost:9092
 build:remote-exec --remote_default_exec_properties=OSFamily=linux
 build:remote-exec --remote_default_exec_properties=container-image=
