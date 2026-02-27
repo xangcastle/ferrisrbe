@@ -30,7 +30,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_BAZEL_REPIN: off
 
 jobs:
   # Build FerrisRBE for benchmarking using Bazel (dogfooding)
