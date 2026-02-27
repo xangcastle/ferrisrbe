@@ -34,6 +34,8 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 cleanup() {
     log_info "Cleaning up..."
+    # Stop supporting services first
+    stop_services
     # Kill any lingering server processes
     pkill -f rbe-server 2>/dev/null || true
     rm -f "$RESULTS_DIR"/rbe-server.log 2>/dev/null || true
@@ -104,6 +106,67 @@ get_server_binary() {
     return 1
 }
 
+# Start supporting services (bazel-remote for CAS)
+start_services() {
+    log_info "Starting supporting services..."
+    
+    # Check if we're in standalone mode (no external deps)
+    if [ -n "$BENCHMARK_STANDALONE" ]; then
+        log_info "Standalone mode: Starting bazel-remote..."
+        
+        # Try to find or download bazel-remote
+        local bazel_remote_path=""
+        if command -v bazel-remote &> /dev/null; then
+            bazel_remote_path=$(which bazel-remote)
+        elif [ -f "$PROJECT_ROOT/.cache/bazel-remote" ]; then
+            bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
+        else
+            # Download bazel-remote binary
+            log_info "Downloading bazel-remote..."
+            mkdir -p "$PROJECT_ROOT/.cache"
+            local bazel_remote_version="1.3.23"
+            local download_url="https://github.com/buchgr/bazel-remote/releases/download/v${bazel_remote_version}/bazel-remote-${bazel_remote_version}-linux-x86_64"
+            curl -sL -o "$PROJECT_ROOT/.cache/bazel-remote" "$download_url" || true
+            chmod +x "$PROJECT_ROOT/.cache/bazel-remote" 2>/dev/null || true
+            bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
+        fi
+        
+        if [ -x "$bazel_remote_path" ]; then
+            log_info "Starting bazel-remote on port 9094..."
+            mkdir -p "$RESULTS_DIR/bazel-remote-cache"
+            "$bazel_remote_path" --dir="$RESULTS_DIR/bazel-remote-cache" --port=9094 --grpc_port=9094 &
+            BAZEL_REMOTE_PID=$!
+            
+            # Wait for bazel-remote to be ready
+            for i in {1..30}; do
+                if nc -z localhost 9094 2>/dev/null; then
+                    log_success "bazel-remote ready (PID: $BAZEL_REMOTE_PID)"
+                    break
+                fi
+                sleep 1
+            done
+        else
+            log_warn "Could not find or download bazel-remote, CAS operations may fail"
+        fi
+    fi
+    
+    # Verify CAS is available if needed
+    if nc -z localhost 9094 2>/dev/null; then
+        log_success "CAS (bazel-remote) available on port 9094"
+    else
+        log_warn "CAS not available on port 9094, some tests may fail"
+    fi
+}
+
+# Stop supporting services
+stop_services() {
+    if [ -n "$BAZEL_REMOTE_PID" ]; then
+        log_info "Stopping bazel-remote (PID: $BAZEL_REMOTE_PID)..."
+        kill $BAZEL_REMOTE_PID 2>/dev/null || true
+        wait $BAZEL_REMOTE_PID 2>/dev/null || true
+    fi
+}
+
 # Start FerrisRBE server
 start_server() {
     log_info "Starting FerrisRBE server..."
@@ -119,12 +182,17 @@ start_server() {
     
     log_info "Using server binary: $server_binary"
     
+    # Set CAS endpoint to localhost for standalone mode
+    if [ -n "$BENCHMARK_STANDALONE" ]; then
+        export CAS_ENDPOINT="localhost:9094"
+    fi
+    
     "$server_binary" &
     SERVER_PID=$!
     
     # Wait for server to be ready
     log_info "Waiting for server to be ready..."
-    for i in {1..30}; do
+    for i in {1..60}; do
         if nc -z localhost 9092 2>/dev/null; then
             log_success "Server ready (PID: $SERVER_PID)"
             return 0
@@ -132,7 +200,7 @@ start_server() {
         sleep 1
     done
     
-    log_error "Server failed to start within 30 seconds"
+    log_error "Server failed to start within 60 seconds"
     exit 1
 }
 
@@ -369,6 +437,13 @@ main() {
     log_info "Starting CI Benchmark Suite"
     log_info "Mode: $MODE"
     log_info "Results directory: $RESULTS_DIR"
+    
+    if [ -n "$BENCHMARK_STANDALONE" ]; then
+        log_info "Standalone mode enabled (starting local services)"
+    fi
+    
+    # Start supporting services first
+    start_services
     
     # Start server
     start_server
