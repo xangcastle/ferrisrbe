@@ -78,6 +78,30 @@ jobs:
       issues: write
       pull-requests: write
     
+    # Use GitHub Actions services for bazel-remote (CAS)
+    services:
+      bazel-remote:
+        image: buchgr/bazel-remote-cache:latest
+        ports:
+          - 9094:9094
+          - 8080:8080
+        env:
+          BAZEL_REMOTE_GRPC_PORT: 9094
+          BAZEL_REMOTE_HTTP_PORT: 8080
+          BAZEL_REMOTE_DIR: /data
+          BAZEL_REMOTE_MAX_SIZE: 1
+        options: >-
+          --health-cmd "nc -z localhost 9094 || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    
+    env:
+      # Point server to the service
+      CAS_ENDPOINT: localhost:9094
+      # Disable standalone mode since we're using services
+      BENCHMARK_SERVICES: 1
+    
     steps:
       # SECURITY NOTE: When using pull_request_target, checkout the PR code explicitly
       # This is safe here because we only run benchmarks, not build/deploy
@@ -105,8 +129,6 @@ jobs:
         id: benchmark
         run: |
           cd benchmark
-          # Set environment variable to run in standalone mode (no external deps)
-          export BENCHMARK_STANDALONE=1
           ./scripts/benchmark-ci.sh light
         continue-on-error: true
         
@@ -199,6 +221,28 @@ jobs:
     permissions:
       contents: read
     
+    # Use GitHub Actions services for bazel-remote (CAS)
+    services:
+      bazel-remote:
+        image: buchgr/bazel-remote-cache:latest
+        ports:
+          - 9094:9094
+          - 8080:8080
+        env:
+          BAZEL_REMOTE_GRPC_PORT: 9094
+          BAZEL_REMOTE_HTTP_PORT: 8080
+          BAZEL_REMOTE_DIR: /data
+          BAZEL_REMOTE_MAX_SIZE: 1
+        options: >-
+          --health-cmd "nc -z localhost 9094 || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    
+    env:
+      CAS_ENDPOINT: localhost:9094
+      BENCHMARK_SERVICES: 1
+    
     steps:
       - uses: actions/checkout@v4
         with:
@@ -222,8 +266,6 @@ jobs:
       - name: Run full benchmark suite
         run: |
           cd benchmark
-          # Use standalone mode for CI (no external services)
-          export BENCHMARK_STANDALONE=1
           ./scripts/benchmark-ci.sh full
       
       - name: Store benchmark result
@@ -253,6 +295,28 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    
+    # Use GitHub Actions services for bazel-remote (CAS)
+    services:
+      bazel-remote:
+        image: buchgr/bazel-remote-cache:latest
+        ports:
+          - 9094:9094
+          - 8080:8080
+        env:
+          BAZEL_REMOTE_GRPC_PORT: 9094
+          BAZEL_REMOTE_HTTP_PORT: 8080
+          BAZEL_REMOTE_DIR: /data
+          BAZEL_REMOTE_MAX_SIZE: 1
+        options: >-
+          --health-cmd "nc -z localhost 9094 || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    
+    env:
+      CAS_ENDPOINT: localhost:9094
+      BENCHMARK_SERVICES: 1
     
     steps:
       - uses: actions/checkout@v4

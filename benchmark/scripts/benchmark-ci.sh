@@ -110,9 +110,26 @@ get_server_binary() {
 start_services() {
     log_info "Starting supporting services..."
     
-    # Check if we're in standalone mode (no external deps)
+    # Check if we're using GitHub Actions services
+    if [ -n "$BENCHMARK_SERVICES" ]; then
+        log_info "Using GitHub Actions services for bazel-remote..."
+        # Wait for the service to be ready (GitHub Actions starts it automatically)
+        for i in {1..60}; do
+            if nc -z localhost 9094 2>/dev/null; then
+                log_success "CAS (bazel-remote) is ready on port 9094"
+                return 0
+            fi
+            log_info "Waiting for bazel-remote to be ready... (attempt $i/60)"
+            sleep 2
+        done
+        log_warn "bazel-remote did not become ready in time"
+        return 1
+    fi
+    
+    # Check if we're in standalone mode (no external deps) - legacy mode
     if [ -n "$BENCHMARK_STANDALONE" ]; then
-        log_info "Standalone mode: Starting bazel-remote..."
+        log_warn "BENCHMARK_STANDALONE is deprecated. Use BENCHMARK_SERVICES with GitHub Actions."
+        log_warn "Attempting to start bazel-remote locally..."
         
         # Try to find or download bazel-remote
         local bazel_remote_path=""
@@ -182,9 +199,12 @@ start_server() {
     
     log_info "Using server binary: $server_binary"
     
-    # Set CAS endpoint to localhost for standalone mode
-    if [ -n "$BENCHMARK_STANDALONE" ]; then
+    # Ensure CAS_ENDPOINT is set (for services mode, it's set by workflow)
+    if [ -z "$CAS_ENDPOINT" ]; then
         export CAS_ENDPOINT="localhost:9094"
+        log_info "CAS_ENDPOINT not set, using default: $CAS_ENDPOINT"
+    else
+        log_info "Using CAS_ENDPOINT: $CAS_ENDPOINT"
     fi
     
     "$server_binary" &

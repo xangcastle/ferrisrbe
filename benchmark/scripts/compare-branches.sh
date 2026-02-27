@@ -38,6 +38,24 @@ echo "PR:    $PR_BINARY"
 echo "========================================"
 echo ""
 
+# Wait for bazel-remote if using GitHub Actions services
+if [ -n "$BENCHMARK_SERVICES" ]; then
+    echo "Waiting for bazel-remote service..."
+    for i in {1..60}; do
+        if nc -z localhost 9094 2>/dev/null; then
+            echo "✓ bazel-remote is ready on port 9094"
+            break
+        fi
+        echo "  Waiting... (attempt $i/60)"
+        sleep 2
+    done
+fi
+
+# Ensure CAS_ENDPOINT is set
+if [ -z "$CAS_ENDPOINT" ]; then
+    export CAS_ENDPOINT="localhost:9094"
+fi
+
 # Function to benchmark a binary
 benchmark_binary() {
     local binary="$1"
@@ -48,12 +66,18 @@ benchmark_binary() {
     
     echo "Benchmarking $name..."
     
+    # Set CAS_ENDPOINT if provided via environment
+    if [ -n "$CAS_ENDPOINT" ]; then
+        export CAS_ENDPOINT
+        echo "  Using CAS_ENDPOINT: $CAS_ENDPOINT"
+    fi
+    
     # Start server
     "$binary" &
     local pid=$!
     
     # Wait for server
-    for i in {1..30}; do
+    for i in {1..60}; do
         if nc -z localhost 9092 2>/dev/null; then
             break
         fi
