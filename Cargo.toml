@@ -47,6 +47,5 @@ tonic-build = "0.12"
 
 [profile.release]
 opt-level = 3
-lto = "fat"
 codegen-units = 1
 panic = "abort"
