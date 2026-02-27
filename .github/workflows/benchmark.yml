@@ -1,8 +1,6 @@
 name: Performance Benchmarks
 
 on:
-  # Use pull_request_target for PRs from forks (runs in base repo context with more permissions)
-  # SECURITY: Only checkout trusted code when using this event
   pull_request_target:
     branches: [ main, master ]
     types: [ opened, synchronize, reopened ]
@@ -12,7 +10,6 @@ on:
       - 'Cargo.lock'
       - 'benchmark/**'
       - '.github/workflows/benchmark.yml'
-  # Also trigger on regular pull_request for PRs within the same repo
   pull_request:
     branches: [ main, master ]
     paths:
@@ -35,28 +32,34 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Build FerrisRBE for benchmarking
+  # Build FerrisRBE for benchmarking using Bazel (dogfooding)
   build:
     name: Build for Benchmark
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
+      - name: Install Bazel
+        uses: bazelbuild/setup-bazelisk@v3
       
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Configure Bazel caching
+        uses: actions/cache@v4
         with:
-          key: benchmark-${{ runner.os }}
+          path: ~/.cache/bazel
+          key: bazel-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-
       
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       
-      - name: Build release binary
-        run: cargo build --release --bin rbe-server
+      - name: Build release binary with Bazel
+        run: |
+          bazel build //:rbe-server --config=release
+          # Copy to standard location for artifact upload
+          mkdir -p target/release
+          # Use bazel info with --config=release to get correct path
+          cp $(bazel info --config=release bazel-bin)/rbe-server target/release/rbe-server
       
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -152,16 +155,23 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = 'benchmark/results/benchmark_summary.md';
+            const path = require('path');
             
+            // Read summary
             let body = '## 🚀 Performance Benchmark Results\n\n';
+            const summaryPath = 'benchmark/results/benchmark_summary.md';
             
-            if (fs.existsSync(path)) {
-              const summary = fs.readFileSync(path, 'utf8');
+            if (fs.existsSync(summaryPath)) {
+              const summary = fs.readFileSync(summaryPath, 'utf8');
               body += summary;
             } else {
               body += '❌ Benchmark failed to complete. Check logs for details.';
             }
+            
+            // Add link to workflow run
+            body += `\n\n---\n`;
+            body += `📊 [View full details and artifacts](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
+            body += `🕐 Benchmark run: ${new Date().toISOString()}\n`;
             
             // Get the PR number from the appropriate event payload
             const issueNumber = context.issue.number || context.payload.pull_request.number;
@@ -319,6 +329,15 @@ jobs:
           name: benchmark-results-pr
           path: pr-results/
       
+      - name: Download PR binary
+        uses: actions/download-artifact@v4
+        with:
+          name: rbe-server-binary
+          path: pr-branch/target/release/
+      
+      - name: Make PR binary executable
+        run: chmod +x pr-branch/target/release/rbe-server
+      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -328,11 +347,28 @@ jobs:
         run: |
           pip install grpcio grpcio-tools
       
-      - name: Build main branch binary
+      - name: Install Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+      
+      - name: Configure Bazel caching
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: bazel-main-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-
+      
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      
+      - name: Build main branch binary with Bazel
         working-directory: main-branch
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          cargo build --release --bin rbe-server
+          bazel build //:rbe-server --config=release
+          # Copy to expected path for comparison script
+          mkdir -p target/release
+          # Use bazel info with --config=release to get correct path
+          cp $(bazel info --config=release bazel-bin)/rbe-server target/release/rbe-server
       
       - name: Run comparison benchmark
         id: compare
@@ -415,9 +451,75 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const body = `## 🚨 Performance Regression Detected\n\n` +
-              `This PR introduces performance regressions that exceed the threshold.\n\n` +
-              `Please review the benchmark results and optimize before merging.`;
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Try to read failed metrics for detailed info
+            let failedMetrics = null;
+            let benchmarkData = null;
+            try {
+              const failedPath = path.join(process.env.GITHUB_WORKSPACE, 'results', 'failed_metrics.json');
+              const dataPath = path.join(process.env.GITHUB_WORKSPACE, 'results', 'benchmark_data.json');
+              
+              if (fs.existsSync(failedPath)) {
+                failedMetrics = JSON.parse(fs.readFileSync(failedPath, 'utf8'));
+                console.log('Found failed_metrics.json:', Object.keys(failedMetrics));
+              }
+              if (fs.existsSync(dataPath)) {
+                benchmarkData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+              }
+            } catch (e) {
+              console.log('Could not read metrics files:', e.message);
+            }
+            
+            // Build detailed regression report
+            let body = `## 🚨 Performance Regression Detected\n\n`;
+            body += `This PR introduces performance regressions that exceed the acceptable thresholds.\n\n`;
+            
+            // Failed metrics table
+            if (failedMetrics && Object.keys(failedMetrics).length > 0) {
+              body += `### Failed Metrics\n\n`;
+              body += `| Metric | Actual | Threshold | Unit |\n`;
+              body += `|--------|--------|-----------|------|\n`;
+              
+              for (const [metric, info] of Object.entries(failedMetrics)) {
+                body += `| **${metric}** | ${info.value} | ${info.threshold} | ${info.unit} |\n`;
+              }
+              
+              body += `\n`;
+            } else if (benchmarkData && benchmarkData.results) {
+              // Fallback: show all results
+              body += `### Benchmark Results\n\n`;
+              body += `| Metric | Value |\n`;
+              body += `|--------|-------|\n`;
+              
+              for (const [metric, value] of Object.entries(benchmarkData.results)) {
+                if (value !== null && value !== undefined) {
+                  body += `| ${metric} | ${value} |\n`;
+                }
+              }
+              
+              body += `\n`;
+            }
+            
+            // Thresholds reference
+            body += `### Thresholds Reference\n\n`;
+            body += `| Metric | Max Allowed |\n`;
+            body += `|--------|-------------|\n`;
+            body += `| Memory | 20 MB |\n`;
+            body += `| Cold Start | 500 ms |\n`;
+            body += `| Execution P99 | 100 ms |\n`;
+            body += `| Cache P99 | 1000 μs |\n`;
+            body += `| Cleanup Rate | 95% |\n\n`;
+            
+            body += `### Next Steps\n\n`;
+            body += `1. 📊 [View full benchmark results and logs](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
+            body += `2. 🔍 Download artifacts to analyze detailed metrics\n`;
+            body += `3. 🛠️  Identify and fix the performance regression\n`;
+            body += `4. 🔄 Re-run benchmarks after optimizations\n\n`;
+            body += `> 💡 **Tip:** Check the workflow artifacts for detailed benchmark data and logs.\n\n`;
+            body += `---\n`;
+            body += `*Benchmark run: ${new Date().toISOString()}*`;
             
             const issueNumber = context.issue.number || context.payload.pull_request?.number;
             if (!issueNumber) {
@@ -432,6 +534,7 @@ jobs:
                 issue_number: issueNumber,
                 body: body
               });
+              console.log('Posted regression comment with details');
             } catch (error) {
               console.log('Could not post regression comment:', error.message);
             }

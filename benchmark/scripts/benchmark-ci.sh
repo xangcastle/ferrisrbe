@@ -335,15 +335,55 @@ run_light_benchmarks() {
         --operation read \
         --output "$RESULTS_DIR/cache_${TIMESTAMP}.json" || true
     
-    # 4. Cold start (single measurement)
+    # 4. Cold start (single measurement) - measured AFTER bazel-remote is ready
     log_info "Test 4/5: Cold start time..."
-    stop_server
-    START_TIME=$(date +%s%N)
-    start_server
-    END_TIME=$(date +%s%N)
-    COLD_START_MS=$(( (END_TIME - START_TIME) / 1000000 ))
-    echo "$COLD_START_MS" > "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt"
-    log_success "Cold start: ${COLD_START_MS}ms"
+    
+    # Ensure bazel-remote is ready before measuring cold start
+    log_info "  Verifying bazel-remote is ready..."
+    if ! nc -z localhost 9094 2>/dev/null; then
+        log_warn "  bazel-remote not ready, waiting..."
+        for i in {1..30}; do
+            if nc -z localhost 9094 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+    fi
+    
+    if nc -z localhost 9094 2>/dev/null; then
+        log_info "  bazel-remote ready, measuring server cold start..."
+        stop_server
+        sleep 1  # Ensure clean shutdown
+        
+        # Measure ONLY server startup time (bazel-remote is already ready)
+        START_TIME=$(date +%s%N)
+        
+        # Start server directly without waiting for bazel-remote check
+        local server_binary=$(get_server_binary)
+        export CAS_ENDPOINT="${CAS_ENDPOINT:-localhost:9094}"
+        "$server_binary" &
+        SERVER_PID=$!
+        
+        # Wait for server to be ready
+        for i in {1..30}; do
+            if nc -z localhost 9092 2>/dev/null; then
+                END_TIME=$(date +%s%N)
+                COLD_START_MS=$(( (END_TIME - START_TIME) / 1000000 ))
+                echo "$COLD_START_MS" > "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt"
+                log_success "Cold start: ${COLD_START_MS}ms"
+                break
+            fi
+            sleep 0.1
+        done
+        
+        if ! nc -z localhost 9092 2>/dev/null; then
+            log_error "Server failed to start for cold start measurement"
+            kill $SERVER_PID 2>/dev/null || true
+        fi
+    else
+        log_warn "  bazel-remote not available, skipping cold start measurement"
+        echo "0" > "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt"
+    fi
     
     # 5. Connection churn (reduced)
     log_info "Test 5/5: Connection churn (light)..."

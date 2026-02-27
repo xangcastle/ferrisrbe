@@ -26,7 +26,7 @@ class Threshold:
 # These values are based on expected FerrisRBE performance
 THRESHOLDS = {
     "memory_mb": Threshold("memory_mb", 20.0, "MB"),  # Idle memory should be <20MB
-    "cold_start_ms": Threshold("cold_start_ms", 500.0, "ms"),  # Cold start <500ms
+    "cold_start_ms": Threshold("cold_start_ms", 500.0, "ms"),  # Cold start <500ms (server only, after CAS ready)
     "execution_p99_ms": Threshold("execution_p99_ms", 100.0, "ms"),  # P99 latency
     "cache_p99_us": Threshold("cache_p99_us", 1000.0, "μs"),  # Cache read P99
     "churn_cleanup_rate": Threshold("churn_cleanup_rate", 95.0, "%"),  # Cleanup rate
@@ -66,13 +66,14 @@ def check_threshold(metric: str, value: float, threshold: Threshold) -> Tuple[bo
     return passed, message
 
 
-def check_regressions(data: Dict) -> Tuple[bool, List[str]]:
+def check_regressions(data: Dict) -> Tuple[bool, List[str], Dict]:
     """
     Check all metrics for regressions
-    Returns (all_passed, messages)
+    Returns (all_passed, messages, failed_metrics)
     """
     results = data.get("results", {})
     messages = []
+    failed_metrics = {}
     all_passed = True
     
     print("=" * 70)
@@ -95,11 +96,17 @@ def check_regressions(data: Dict) -> Tuple[bool, List[str]]:
         
         if not passed:
             all_passed = False
+            if value is not None:
+                failed_metrics[metric] = {
+                    "value": value,
+                    "threshold": threshold.max_value,
+                    "unit": threshold.unit
+                }
     
-    return all_passed, messages
+    return all_passed, messages, failed_metrics
 
 
-def generate_report(all_passed: bool, messages: List[str], output_file: str = None):
+def generate_report(all_passed: bool, messages: List[str], output_file: str = None, failed_metrics: Dict = None):
     """Generate and optionally save regression report"""
     report_lines = [
         "## Performance Regression Check Results\n",
@@ -200,7 +207,7 @@ def main():
     data = load_benchmark_data(args.benchmark_file)
     
     # Check against thresholds
-    all_passed, messages = check_regressions(data)
+    all_passed, messages, failed_metrics = check_regressions(data)
     
     # Compare with baseline if provided
     if args.baseline:
@@ -210,6 +217,15 @@ def main():
     
     # Generate report
     generate_report(all_passed, messages, args.output)
+    
+    # Save failed metrics for CI integration
+    if failed_metrics:
+        import os
+        results_dir = os.path.dirname(args.benchmark_file)
+        failed_metrics_file = os.path.join(results_dir, "failed_metrics.json")
+        with open(failed_metrics_file, 'w') as f:
+            json.dump(failed_metrics, f, indent=2)
+        print(f"\nFailed metrics saved to: {failed_metrics_file}")
     
     # Exit with appropriate code
     if not all_passed and args.fail_on_regression:

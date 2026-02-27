@@ -90,11 +90,20 @@ benchmark_binary() {
         return 1
     fi
     
-    # Get memory baseline
+    # Get memory baseline (multiple samples like benchmark-ci.sh)
+    echo "  Sampling memory..."
     sleep 2
-    MEMORY=$(ps -o rss= -p $pid | awk '{print $1/1024}')
+    for i in {1..5}; do
+        ps -o rss= -p $pid 2>/dev/null | awk '{print $1/1024}' || echo "0"
+        sleep 1
+    done > "$output_dir/memory_samples.txt"
+    
+    # Use first non-zero value (consistent with benchmark-ci.sh)
+    MEMORY=$(grep -v "^0$" "$output_dir/memory_samples.txt" | head -1)
+    [ -z "$MEMORY" ] && MEMORY="0"
+    
     echo "$MEMORY" > "$output_dir/memory.txt"
-    echo "  Memory: ${MEMORY}MB"
+    echo "  Memory: ${MEMORY}MB (avg of samples)"
     
     # Quick throughput test
     python3 "$SCRIPT_DIR/execution-load-test.py" \

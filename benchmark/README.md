@@ -515,7 +515,7 @@ python3 scripts/check-regression.py results/benchmark_data.json
 | Metric | Threshold | Description |
 |--------|-----------|-------------|
 | Memory | < 20 MB | Idle memory footprint |
-| Cold Start | < 500 ms | Server startup time |
+| Cold Start | < 500 ms | Server startup time (measured after CAS is ready) |
 | Cleanup Rate | > 95% | Resource cleanup after disconnections |
 | P99 Latency | < 100 ms | Execution API latency |
 
