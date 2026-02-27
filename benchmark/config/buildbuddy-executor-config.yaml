@@ -1,0 +1,35 @@
+# BuildBuddy Executor Configuration
+
+executor:
+  enabled: true
+  host: "buildbuddy-executor"
+  port: 1987
+  app_target: "grpc://buildbuddy-server:1985"
+  pool: "default"
+  
+  # Local execution
+  docker_socket: ""
+  enable_firecracker: false
+  enable_docker: false
+  
+  # Root directory
+  root_directory: /workspace
+  
+  # Resource limits
+  memory_bytes: 4000000000
+  millicpu: 4000
+  
+  # Task sizing
+  default_isolation_type: "none"
+  
+  # Platform properties
+  properties:
+    - name: "OSFamily"
+      value: "linux"
+    - name: "Arch"
+      value: "amd64"
+
+database:
+  data_source: "postgres://buildbuddy:buildbuddy@buildbuddy-postgres:5432/buildbuddy?sslmode=disable"
+
+redis_target: "buildbuddy-redis:6379"
