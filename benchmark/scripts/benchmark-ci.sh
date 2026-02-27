@@ -114,12 +114,18 @@ start_services() {
     if [ -n "$BENCHMARK_SERVICES" ]; then
         log_info "Using GitHub Actions services for bazel-remote..."
         # Wait for the service to be ready (GitHub Actions starts it automatically)
-        for i in {1..60}; do
+        # Give it extra time to start up (image download + initialization)
+        log_info "Waiting for bazel-remote to initialize (this may take 30-60s)..."
+        for i in {1..90}; do
             if nc -z localhost 9094 2>/dev/null; then
                 log_success "CAS (bazel-remote) is ready on port 9094"
+                # Extra wait to ensure it's fully initialized
+                sleep 3
                 return 0
             fi
-            log_info "Waiting for bazel-remote to be ready... (attempt $i/60)"
+            if [ $((i % 10)) -eq 0 ]; then
+                log_info "Still waiting for bazel-remote... (attempt $i/90)"
+            fi
             sleep 2
         done
         log_warn "bazel-remote did not become ready in time"
@@ -128,43 +134,41 @@ start_services() {
     
     # Check if we're in standalone mode (no external deps) - legacy mode
     if [ -n "$BENCHMARK_STANDALONE" ]; then
-        log_warn "BENCHMARK_STANDALONE is deprecated. Use BENCHMARK_SERVICES with GitHub Actions."
-        log_warn "Attempting to start bazel-remote locally..."
+        log_warn "BENCHMARK_STANDALONE is deprecated. Use BENCHMARK_LOCAL for local execution."
+        start_bazel_remote_local
+        return $?
+    fi
+    
+    # Check if we're in local mode (auto-detect and start bazel-remote if needed)
+    if [ -n "$BENCHMARK_LOCAL" ]; then
+        log_info "Local mode: Checking for bazel-remote..."
         
-        # Try to find or download bazel-remote
-        local bazel_remote_path=""
-        if command -v bazel-remote &> /dev/null; then
-            bazel_remote_path=$(which bazel-remote)
-        elif [ -f "$PROJECT_ROOT/.cache/bazel-remote" ]; then
-            bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
-        else
-            # Download bazel-remote binary
-            log_info "Downloading bazel-remote..."
-            mkdir -p "$PROJECT_ROOT/.cache"
-            local bazel_remote_version="1.3.23"
-            local download_url="https://github.com/buchgr/bazel-remote/releases/download/v${bazel_remote_version}/bazel-remote-${bazel_remote_version}-linux-x86_64"
-            curl -sL -o "$PROJECT_ROOT/.cache/bazel-remote" "$download_url" || true
-            chmod +x "$PROJECT_ROOT/.cache/bazel-remote" 2>/dev/null || true
-            bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
+        # Check if bazel-remote is already running
+        if nc -z localhost 9094 2>/dev/null; then
+            log_success "CAS (bazel-remote) already running on port 9094"
+            return 0
         fi
         
-        if [ -x "$bazel_remote_path" ]; then
-            log_info "Starting bazel-remote on port 9094..."
-            mkdir -p "$RESULTS_DIR/bazel-remote-cache"
-            "$bazel_remote_path" --dir="$RESULTS_DIR/bazel-remote-cache" --port=9094 --grpc_port=9094 &
-            BAZEL_REMOTE_PID=$!
-            
-            # Wait for bazel-remote to be ready
-            for i in {1..30}; do
-                if nc -z localhost 9094 2>/dev/null; then
-                    log_success "bazel-remote ready (PID: $BAZEL_REMOTE_PID)"
-                    break
-                fi
-                sleep 1
-            done
-        else
-            log_warn "Could not find or download bazel-remote, CAS operations may fail"
+        # Try to start bazel-remote locally
+        start_bazel_remote_local
+        return $?
+    fi
+    
+    # Auto-detect mode: if no env vars set, assume local execution and try to start services
+    if [ -z "$BENCHMARK_SERVICES" ] && [ -z "$BENCHMARK_STANDALONE" ] && [ -z "$BENCHMARK_LOCAL" ]; then
+        log_info "Auto-detect mode: Checking for CAS..."
+        
+        # Check if bazel-remote is already running
+        if nc -z localhost 9094 2>/dev/null; then
+            log_success "CAS (bazel-remote) already available on port 9094"
+            return 0
         fi
+        
+        # Not running, try to start it locally
+        log_info "CAS not found, attempting to start bazel-remote locally..."
+        log_info "(Set BENCHMARK_LOCAL=1 to always start local services, or BENCHMARK_SKIP_SERVICES=1 to skip)"
+        start_bazel_remote_local
+        return $?
     fi
     
     # Verify CAS is available if needed
@@ -172,6 +176,57 @@ start_services() {
         log_success "CAS (bazel-remote) available on port 9094"
     else
         log_warn "CAS not available on port 9094, some tests may fail"
+    fi
+}
+
+# Helper function to start bazel-remote locally
+start_bazel_remote_local() {
+    local bazel_remote_path=""
+    
+    # Check if bazel-remote binary exists
+    if command -v bazel-remote &> /dev/null; then
+        bazel_remote_path=$(which bazel-remote)
+    elif [ -f "$PROJECT_ROOT/.cache/bazel-remote" ]; then
+        bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
+    else
+        # Try to download bazel-remote binary (Linux x86_64 only)
+        local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+        local arch=$(uname -m)
+        
+        if [ "$os" = "linux" ] && [ "$arch" = "x86_64" ]; then
+            log_info "Downloading bazel-remote..."
+            mkdir -p "$PROJECT_ROOT/.cache"
+            local bazel_remote_version="1.3.23"
+            local download_url="https://github.com/buchgr/bazel-remote/releases/download/v${bazel_remote_version}/bazel-remote-${bazel_remote_version}-linux-x86_64"
+            curl -sL -o "$PROJECT_ROOT/.cache/bazel-remote" "$download_url" 2>/dev/null || true
+            chmod +x "$PROJECT_ROOT/.cache/bazel-remote" 2>/dev/null || true
+            bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
+        else
+            log_warn "Automatic download only supported on Linux x86_64. Current: $os $arch"
+        fi
+    fi
+    
+    if [ -x "$bazel_remote_path" ]; then
+        log_info "Starting bazel-remote on port 9094..."
+        mkdir -p "$RESULTS_DIR/bazel-remote-cache"
+        "$bazel_remote_path" --dir="$RESULTS_DIR/bazel-remote-cache" --port=9094 --grpc_port=9094 &
+        BAZEL_REMOTE_PID=$!
+        
+        # Wait for bazel-remote to be ready
+        for i in {1..30}; do
+            if nc -z localhost 9094 2>/dev/null; then
+                log_success "bazel-remote ready (PID: $BAZEL_REMOTE_PID)"
+                return 0
+            fi
+            sleep 1
+        done
+        log_warn "bazel-remote failed to start within 30 seconds"
+        return 1
+    else
+        log_warn "Could not find or download bazel-remote binary"
+        log_warn "To install bazel-remote: https://github.com/buchgr/bazel-remote#readme"
+        log_warn "Or run: docker run -d -p 9094:9094 buchgr/bazel-remote-cache:latest"
+        return 1
     fi
 }
 

@@ -324,7 +324,8 @@ benchmark/
 ├── config/                            # Configuration files
 ├── scripts/
 │   ├── bazel-utils.sh                 # Bazel utilities (handles symlink_prefix)
-│   ├── benchmark.sh                   # Memory/CPU benchmark
+│   ├── benchmark.sh                   # Memory/CPU benchmark (Docker-based)
+│   ├── benchmark-local.sh             # Local testing (auto-starts bazel-remote)
 │   ├── benchmark-ci.sh                # CI/CD script (light/full modes)
 │   ├── build-with-bazel.sh            # Build using Bazel (dogfooding)
 │   ├── check-regression.py            # Regression detection
@@ -485,10 +486,23 @@ See [CI_CD.md](CI_CD.md) for complete configuration including:
 - Comparison against main branch
 - GitLab CI configuration
 
-### Quick CI Test
+### Quick Local Test
+
+For local development and testing, use the local benchmark script (handles Docker/bazel-remote automatically):
 
 ```bash
-# Run CI benchmarks locally
+# Quick local benchmark (starts bazel-remote via Docker if available)
+cd benchmark
+./scripts/benchmark-local.sh light
+
+# Or run full suite
+./scripts/benchmark-local.sh full
+```
+
+### CI Test (for automation)
+
+```bash
+# Run CI benchmarks locally (expects bazel-remote to be available)
 cd benchmark
 ./scripts/benchmark-ci.sh light
 

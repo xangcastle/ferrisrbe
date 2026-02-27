@@ -90,11 +90,6 @@ jobs:
           BAZEL_REMOTE_HTTP_PORT: 8080
           BAZEL_REMOTE_DIR: /data
           BAZEL_REMOTE_MAX_SIZE: 1
-        options: >-
-          --health-cmd "nc -z localhost 9094 || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     
     env:
       # Point server to the service
@@ -233,11 +228,6 @@ jobs:
           BAZEL_REMOTE_HTTP_PORT: 8080
           BAZEL_REMOTE_DIR: /data
           BAZEL_REMOTE_MAX_SIZE: 1
-        options: >-
-          --health-cmd "nc -z localhost 9094 || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     
     env:
       CAS_ENDPOINT: localhost:9094
@@ -308,11 +298,6 @@ jobs:
           BAZEL_REMOTE_HTTP_PORT: 8080
           BAZEL_REMOTE_DIR: /data
           BAZEL_REMOTE_MAX_SIZE: 1
-        options: >-
-          --health-cmd "nc -z localhost 9094 || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     
     env:
       CAS_ENDPOINT: localhost:9094

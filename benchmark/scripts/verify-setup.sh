@@ -133,7 +133,8 @@ main() {
     check_executable "$SCRIPT_DIR/bazel-utils.sh" "bazel-utils.sh"
     check_executable "$SCRIPT_DIR/build-with-bazel.sh" "build-with-bazel.sh"
     check_executable "$SCRIPT_DIR/benchmark.sh" "benchmark.sh"
-    check_executable "$SCRIPT_DIR/benchmark-ci.sh" "benchmark-ci.sh"
+    check_executable "$SCRIPT_DIR/benchmark-local.sh" "benchmark-local.sh (local testing)"
+    check_executable "$SCRIPT_DIR/benchmark-ci.sh" "benchmark-ci.sh (CI/CD)"
     check_executable "$SCRIPT_DIR/check-regression.py" "check-regression.py"
     
     # Section 5: Test Scripts
@@ -252,8 +253,9 @@ main() {
         echo ""
         echo "Next steps:"
         echo "  1. Build FerrisRBE: ./scripts/build-with-bazel.sh all"
-        echo "  2. Run benchmarks:  ./scripts/benchmark.sh"
-        echo "  3. Run CI tests:    ./scripts/benchmark-ci.sh light"
+        echo "  2. Run local test:  ./scripts/benchmark-local.sh light"
+        echo "  3. Run benchmarks:  ./scripts/benchmark.sh"
+        echo "  4. Run CI tests:    ./scripts/benchmark-ci.sh light"
         exit 0
     else
         echo -e "${RED}❌ Setup has issues. Please fix the failures above.${NC}"
