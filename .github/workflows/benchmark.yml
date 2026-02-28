@@ -46,9 +46,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/bazel
-          key: bazel-${{ runner.os }}-v5-${{ github.sha }}
+          key: bazel-${{ runner.os }}-v6-${{ github.sha }}
           restore-keys: |
-            bazel-${{ runner.os }}-v5-
+            bazel-${{ runner.os }}-v6-
       
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -354,9 +354,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/bazel
-          key: bazel-main-${{ runner.os }}-v5-${{ github.sha }}
+          key: bazel-main-${{ runner.os }}-v6-${{ github.sha }}
           restore-keys: |
-            bazel-${{ runner.os }}-v5-
+            bazel-${{ runner.os }}-v6-
       
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
