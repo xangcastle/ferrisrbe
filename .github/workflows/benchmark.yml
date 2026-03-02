@@ -423,13 +423,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: benchmark-results-pr
-          path: results/
+          path: ./results/
       
       - name: Check regression thresholds
         id: check
         run: |
-          cd benchmark
-          python3 scripts/check-regression.py results/benchmark_data.json
+          # Artifact is downloaded to results/ (repo root), script is in benchmark/
+          python3 benchmark/scripts/check-regression.py results/benchmark_data.json
         
       - name: Report regressions
         if: failure()
@@ -446,12 +446,38 @@ jobs:
               const failedPath = path.join(process.env.GITHUB_WORKSPACE, 'results', 'failed_metrics.json');
               const dataPath = path.join(process.env.GITHUB_WORKSPACE, 'results', 'benchmark_data.json');
               
+              // Debug logging
+              console.log('Looking for files at:');
+              console.log('  - failedPath:', failedPath);
+              console.log('  - dataPath:', dataPath);
+              console.log('  - GITHUB_WORKSPACE:', process.env.GITHUB_WORKSPACE);
+              
+              // List workspace contents for debugging
+              try {
+                const workspaceContents = fs.readdirSync(process.env.GITHUB_WORKSPACE);
+                console.log('  - Workspace contents:', workspaceContents);
+                if (fs.existsSync(path.join(process.env.GITHUB_WORKSPACE, 'results'))) {
+                  const resultsContents = fs.readdirSync(path.join(process.env.GITHUB_WORKSPACE, 'results'));
+                  console.log('  - results/ contents:', resultsContents);
+                } else {
+                  console.log('  - results/ directory does not exist');
+                }
+              } catch (err) {
+                console.log('  - Could not list directory:', err.message);
+              }
+              
               if (fs.existsSync(failedPath)) {
                 failedMetrics = JSON.parse(fs.readFileSync(failedPath, 'utf8'));
                 console.log('Found failed_metrics.json:', Object.keys(failedMetrics));
+              } else {
+                console.log('failed_metrics.json not found');
               }
+              
               if (fs.existsSync(dataPath)) {
                 benchmarkData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+                console.log('Found benchmark_data.json');
+              } else {
+                console.log('benchmark_data.json not found');
               }
             } catch (e) {
               console.log('Could not read metrics files:', e.message);
