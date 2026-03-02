@@ -10,6 +10,7 @@ on:
       - 'Cargo.lock'
       - 'benchmark/**'
       - '.github/workflows/benchmark.yml'
+      - 'oci/**'
   pull_request:
     branches: [ main, master ]
     paths:
@@ -18,6 +19,7 @@ on:
       - 'Cargo.lock'
       - 'benchmark/**'
       - '.github/workflows/benchmark.yml'
+      - 'oci/**'
   push:
     branches: [ main, master ]
   workflow_dispatch:
@@ -32,9 +34,9 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Build FerrisRBE for benchmarking using Bazel (dogfooding)
+  # Build FerrisRBE OCI image using Bazel (dogfooding)
   build:
-    name: Build for Benchmark
+    name: Build OCI Image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,24 +55,34 @@ jobs:
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       
-      - name: Build release binary with Bazel
+      - name: Build OCI image with Bazel
         run: |
-          bazel build //:rbe-server --config=release
-          # Copy to standard location for artifact upload
-          mkdir -p target/release
-          # Use bazel info with --config=release to get correct path
-          cp $(bazel info --config=release bazel-bin)/rbe-server target/release/rbe-server
+          # Build AMD64 image (GitHub Actions runners are AMD64)
+          bazel run //oci:server_load_amd64
+          
+          # Verify image was loaded
+          docker images | grep ferrisrbe || true
+          
+          # Get image info
+          echo "=== Image Details ==="
+          docker inspect ferrisrbe/server:latest --format='{{.Size}}' | awk '{print "Size: " $1/1024/1024 " MB"}'
+          docker inspect ferrisrbe/server:latest --format='{{.Id}}' | cut -d: -f2 | head -c 12 | xargs -I {} echo "Image ID: {}"
       
-      - name: Upload binary artifact
+      - name: Save image as artifact
+        run: |
+          mkdir -p /tmp/docker-images
+          docker save ferrisrbe/server:latest | gzip > /tmp/docker-images/ferrisrbe-server.tar.gz
+      
+      - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rbe-server-binary
-          path: target/release/rbe-server
+          name: ferrisrbe-image
+          path: /tmp/docker-images/ferrisrbe-server.tar.gz
           retention-days: 1
 
-  # Run lightweight benchmarks on PR
+  # Run lightweight benchmarks on PR using containers
   benchmark-pr:
-    name: Benchmark PR (Lightweight)
+    name: Benchmark PR (Container Mode)
     runs-on: ubuntu-latest
     needs: build
     # Run on both pull_request (internal PRs) and pull_request_target (fork PRs)
@@ -108,14 +120,16 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       
-      - name: Download binary artifact
+      - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
-          name: rbe-server-binary
-          path: ./target/release/
+          name: ferrisrbe-image
+          path: /tmp/docker-images/
       
-      - name: Make binary executable
-        run: chmod +x ./target/release/rbe-server
+      - name: Load Docker image
+        run: |
+          gunzip -c /tmp/docker-images/ferrisrbe-server.tar.gz | docker load
+          docker images | grep ferrisrbe || true
       
       - name: Install dependencies
         run: |
@@ -123,7 +137,7 @@ jobs:
           sudo apt-get install -y python3-pip bc netcat-openbsd
           pip3 install grpcio grpcio-tools
       
-      - name: Run lightweight benchmark suite
+      - name: Run lightweight benchmark suite (container)
         id: benchmark
         run: |
           cd benchmark
@@ -140,7 +154,7 @@ jobs:
       - name: Create benchmark report
         if: always()
         run: |
-          echo "## 📊 Benchmark Report" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Container Benchmark Report" >> $GITHUB_STEP_SUMMARY
           if [ -f benchmark/results/benchmark_summary.md ]; then
             cat benchmark/results/benchmark_summary.md >> $GITHUB_STEP_SUMMARY
           else
@@ -158,7 +172,7 @@ jobs:
             const path = require('path');
             
             // Read summary
-            let body = '## 🚀 Performance Benchmark Results\n\n';
+            let body = '## 🚀 Container Performance Benchmark Results\n\n';
             const summaryPath = 'benchmark/results/benchmark_summary.md';
             
             if (fs.existsSync(summaryPath)) {
@@ -172,6 +186,7 @@ jobs:
             body += `\n\n---\n`;
             body += `📊 [View full details and artifacts](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
             body += `🕐 Benchmark run: ${new Date().toISOString()}\n`;
+            body += `\n> 💡 **Note:** Benchmarks run using Docker containers for realistic testing\n`;
             
             // Get the PR number from the appropriate event payload
             const issueNumber = context.issue.number || context.payload.pull_request.number;
@@ -190,7 +205,7 @@ jobs:
               });
               
               const benchmarkComment = comments.find(comment => 
-                comment.body.includes('Performance Benchmark Results')
+                comment.body.includes('Container Performance Benchmark Results')
               );
               
               if (benchmarkComment) {
@@ -219,7 +234,7 @@ jobs:
 
   # Run full benchmarks on main branch or manual trigger
   benchmark-full:
-    name: Benchmark Full Suite
+    name: Benchmark Full Suite (Container)
     runs-on: ubuntu-latest-8-core  # Larger runner for full benchmarks
     needs: build
     if: github.event_name == 'push' || github.event.inputs.benchmark_all == 'true'
@@ -248,14 +263,16 @@ jobs:
         with:
           fetch-depth: 0  # Need full history for comparison
       
-      - name: Download binary artifact
+      - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
-          name: rbe-server-binary
-          path: ./target/release/
+          name: ferrisrbe-image
+          path: /tmp/docker-images/
       
-      - name: Make binary executable
-        run: chmod +x ./target/release/rbe-server
+      - name: Load Docker image
+        run: |
+          gunzip -c /tmp/docker-images/ferrisrbe-server.tar.gz | docker load
+          docker images | grep ferrisrbe || true
       
       - name: Install dependencies
         run: |
@@ -263,7 +280,7 @@ jobs:
           sudo apt-get install -y python3-pip bc netcat-openbsd
           pip3 install grpcio grpcio-tools
       
-      - name: Run full benchmark suite
+      - name: Run full benchmark suite (container)
         run: |
           cd benchmark
           ./scripts/benchmark-ci.sh full
@@ -286,9 +303,11 @@ jobs:
           path: benchmark/results/
           retention-days: 90
 
-  # Compare PR against main branch
+  # Compare PR against official Docker Hub release (xangcastle/ferris-server:latest)
+  # This is much faster than compiling main (~30s vs ~5-10min) and tests the actual
+  # release artifact that users will run
   benchmark-compare:
-    name: Compare Against Main
+    name: Compare Against Official Release
     runs-on: ubuntu-latest
     needs: [build, benchmark-pr]
     if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.inputs.benchmark_all != 'true'
@@ -315,28 +334,17 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: main
-          path: main-branch
       
-      - uses: actions/checkout@v4
-        with:
-          path: pr-branch
-      
-      - name: Download PR benchmark results
+      - name: Download PR image artifact
         uses: actions/download-artifact@v4
         with:
-          name: benchmark-results-pr
-          path: pr-results/
+          name: ferrisrbe-image
+          path: /tmp/docker-images/
       
-      - name: Download PR binary
-        uses: actions/download-artifact@v4
-        with:
-          name: rbe-server-binary
-          path: pr-branch/target/release/
-      
-      - name: Make PR binary executable
-        run: chmod +x pr-branch/target/release/rbe-server
+      - name: Load PR Docker image
+        run: |
+          gunzip -c /tmp/docker-images/ferrisrbe-server.tar.gz | docker load
+          docker images | grep ferrisrbe || true
       
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -346,44 +354,21 @@ jobs:
       - name: Install dependencies
         run: |
           pip install grpcio grpcio-tools
+          sudo apt-get update
+          sudo apt-get install -y bc netcat-openbsd
       
-      - name: Install Bazel
-        uses: bazelbuild/setup-bazelisk@v3
-      
-      - name: Configure Bazel caching
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/bazel
-          key: bazel-main-${{ runner.os }}-v7-${{ github.sha }}
-          restore-keys: |
-            bazel-${{ runner.os }}-v7-
-      
-      - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      
-      - name: Build main branch binary with Bazel
-        working-directory: main-branch
-        run: |
-          bazel build //:rbe-server --config=release
-          # Copy to expected path for comparison script
-          mkdir -p target/release
-          # Use bazel info with --config=release to get correct path
-          cp $(bazel info --config=release bazel-bin)/rbe-server target/release/rbe-server
-      
-      - name: Run comparison benchmark
+      - name: Run comparison benchmark (PR vs Official)
         id: compare
         run: |
-          cd pr-branch/benchmark
-          ./scripts/compare-branches.sh \
-            ../../main-branch/target/release/rbe-server \
-            ../../pr-branch/target/release/rbe-server
+          cd benchmark
+          ./scripts/compare-branches.sh ferrisrbe/server:latest
       
       - name: Comment PR with comparison
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const comparisonPath = 'pr-branch/benchmark/results/comparison.md';
+            const comparisonPath = 'benchmark/results/comparison.md';
             
             if (!fs.existsSync(comparisonPath)) {
               console.log('No comparison file found');
@@ -400,10 +385,10 @@ jobs:
             });
             
             const comparisonComment = comments.find(comment => 
-              comment.body.includes('Performance Comparison')
+              comment.body.includes('Performance Comparison: PR vs Official Release')
             );
             
-            const body = `## 📊 Performance Comparison: PR vs Main\n\n${comparison}`;
+            const body = `## 📊 Performance Comparison: PR vs Official Release\n\n${comparison}`;
             
             if (comparisonComment) {
               await github.rest.issues.updateComment({
@@ -444,7 +429,7 @@ jobs:
         id: check
         run: |
           cd benchmark
-          python3 scripts/check-regression.py ../results/benchmark_data.json
+          python3 scripts/check-regression.py results/benchmark_data.json
         
       - name: Report regressions
         if: failure()
@@ -502,22 +487,22 @@ jobs:
               body += `\n`;
             }
             
-            // Thresholds reference
-            body += `### Thresholds Reference\n\n`;
-            body += `| Metric | Max Allowed |\n`;
-            body += `|--------|-------------|\n`;
-            body += `| Memory | 20 MB |\n`;
-            body += `| Cold Start | 500 ms |\n`;
-            body += `| Execution P99 | 100 ms |\n`;
-            body += `| Cache P99 | 1000 μs |\n`;
-            body += `| Cleanup Rate | 95% |\n\n`;
+            // Container-specific thresholds
+            body += `### Thresholds Reference (Container Mode)\n\n`;
+            body += `| Metric | Max Allowed | Description |\n`;
+            body += `|--------|-------------|-------------|\n`;
+            body += `| Memory | 20 MB | Idle memory footprint (containerized) |\n`;
+            body += `| Cold Start | 500 ms | Container startup + server ready |\n`;
+            body += `| Execution P99 | 100 ms | Execution API latency |\n`;
+            body += `| Cache P99 | 1000 μs | Cache read P99 |\n`;
+            body += `| Cleanup Rate | 95% | Resource cleanup after disconnections |\n\n`;
             
             body += `### Next Steps\n\n`;
             body += `1. 📊 [View full benchmark results and logs](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
             body += `2. 🔍 Download artifacts to analyze detailed metrics\n`;
             body += `3. 🛠️  Identify and fix the performance regression\n`;
             body += `4. 🔄 Re-run benchmarks after optimizations\n\n`;
-            body += `> 💡 **Tip:** Check the workflow artifacts for detailed benchmark data and logs.\n\n`;
+            body += `> 💡 **Tip:** These benchmarks run in Docker containers for realistic testing.\n\n`;
             body += `---\n`;
             body += `*Benchmark run: ${new Date().toISOString()}*`;
             

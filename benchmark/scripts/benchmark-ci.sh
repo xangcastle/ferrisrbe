@@ -1,7 +1,10 @@
 #!/bin/bash
-# CI/CD Benchmark Script
-# Runs a lightweight or full benchmark suite for continuous integration
+# CI/CD Benchmark Script - Container-Native Version
+# Runs benchmarks using Docker containers (like production deployment)
 # Works with any Bazel configuration (--symlink_prefix)
+#
+# This script tests the actual OCI images that get deployed to Kubernetes,
+# providing more realistic benchmarks than native binary execution.
 
 set -e
 
@@ -14,6 +17,16 @@ source "$SCRIPT_DIR/bazel-utils.sh"
 PROJECT_ROOT="$(get_workspace_root "$BENCHMARK_DIR/..")"
 RESULTS_DIR="$BENCHMARK_DIR/results"
 MODE="${1:-light}"
+
+# Container configuration
+CONTAINER_NAME="ferrisrbe-benchmark"
+NETWORK_NAME="ferrisrbe-benchmark-net"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+CONTAINER_NAME_FULL="${CONTAINER_NAME}-${TIMESTAMP}"
+
+# Image tags
+LOCAL_IMAGE_TAG="ferrisrbe/server:latest"
+OFFICIAL_IMAGE_TAG="xangcastle/ferris-server:latest"
 
 # Colors
 RED='\033[0;31m'
@@ -29,81 +42,68 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 mkdir -p "$RESULTS_DIR"
 
-# Generate timestamp
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-
 cleanup() {
-    log_info "Cleaning up..."
-    # Stop supporting services first
+    log_info "Cleaning up containers and network..."
+    
+    # Stop and remove benchmark container
+    if docker ps -q --filter "name=${CONTAINER_NAME_FULL}" | grep -q .; then
+        log_info "Stopping benchmark container..."
+        docker stop "${CONTAINER_NAME_FULL}" >/dev/null 2>&1 || true
+        docker rm "${CONTAINER_NAME_FULL}" >/dev/null 2>&1 || true
+    fi
+    
+    # Stop and remove any lingering containers with our prefix
+    docker ps -aq --filter "name=${CONTAINER_NAME}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    
+    # Remove network if it exists
+    if docker network ls --format '{{.Name}}' | grep -q "^${NETWORK_NAME}$"; then
+        docker network rm "${NETWORK_NAME}" >/dev/null 2>&1 || true
+    fi
+    
+    # Stop supporting services if we started them
     stop_services
-    # Kill any lingering server processes
-    pkill -f rbe-server 2>/dev/null || true
-    rm -f "$RESULTS_DIR"/rbe-server.log 2>/dev/null || true
+    
+    log_success "Cleanup complete"
 }
 
 trap cleanup EXIT
 
-# Build FerrisRBE for benchmarking using Bazel (dogfooding)
-build() {
-    log_info "Building FerrisRBE with Bazel..."
+# Build FerrisRBE OCI image using Bazel (dogfooding)
+build_image() {
+    log_info "Building FerrisRBE OCI image with Bazel..."
     
     cd "$PROJECT_ROOT"
     
-    # Use Bazel to build (consistent with project philosophy)
-    # This works regardless of --symlink_prefix setting
-    local server_output=$(bazel_build_and_get_output "//:rbe-server" "$PROJECT_ROOT" "release")
+    # Detect architecture
+    local arch=$(uname -m)
+    local load_target="//oci:server_load_amd64"
     
-    if [ -z "$server_output" ] || [ ! -f "$server_output" ]; then
-        log_warn "Bazel build failed or output not found"
-        log_info "Attempting fallback to cargo..."
-        
-        if command -v cargo &> /dev/null; then
-            cargo build --release --bin rbe-server
-            server_output="$PROJECT_ROOT/target/release/rbe-server"
-        else
-            log_error "Neither Bazel nor Cargo available. Cannot build."
-            exit 1
-        fi
+    if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
+        load_target="//oci:server_load"
+        log_info "Detected ARM64 architecture"
+    else
+        log_info "Detected AMD64 architecture"
     fi
     
-    # Store output path for later use
-    echo "$server_output" > "$PROJECT_ROOT/.bazel-output-server"
-    
-    log_success "Build complete: $server_output"
-}
-
-# Get server binary path (works with any symlink prefix)
-get_server_binary() {
-    # Check if we have a stored output path
-    if [ -f "$PROJECT_ROOT/.bazel-output-server" ]; then
-        local path=$(cat "$PROJECT_ROOT/.bazel-output-server")
-        if [ -f "$path" ]; then
-            echo "$path"
-            return 0
-        fi
+    # Build and load image to Docker
+    log_info "Building and loading OCI image: $load_target"
+    if ! bazel run "$load_target" 2>&1; then
+        log_error "Failed to build and load OCI image"
+        log_info "Make sure Bazel is installed and configured"
+        exit 1
     fi
     
-    # Try to find using Bazel utils
-    local path=$(find_bazel_output "//:rbe-server" "$PROJECT_ROOT")
-    if [ -n "$path" ] && [ -f "$path" ]; then
-        echo "$path"
-        return 0
+    # Verify image was loaded
+    if ! docker image inspect "$LOCAL_IMAGE_TAG" >/dev/null 2>&1; then
+        log_error "Image $LOCAL_IMAGE_TAG not found in Docker"
+        exit 1
     fi
     
-    # Fallback locations
-    local fallbacks=(
-        "$PROJECT_ROOT/target/release/rbe-server"
-    )
+    log_success "OCI image built and loaded: $LOCAL_IMAGE_TAG"
     
-    for path in "${fallbacks[@]}"; do
-        if [ -f "$path" ]; then
-            echo "$path"
-            return 0
-        fi
-    done
-    
-    echo ""
-    return 1
+    # Get image size
+    local image_size=$(docker images --format "{{.Size}}" "$LOCAL_IMAGE_TAG" | head -1)
+    log_info "Image size: $image_size"
 }
 
 # Start supporting services (bazel-remote for CAS)
@@ -114,12 +114,10 @@ start_services() {
     if [ -n "$BENCHMARK_SERVICES" ]; then
         log_info "Using GitHub Actions services for bazel-remote..."
         # Wait for the service to be ready (GitHub Actions starts it automatically)
-        # Give it extra time to start up (image download + initialization)
-        log_info "Waiting for bazel-remote to initialize (this may take 30-60s)..."
+        log_info "Waiting for bazel-remote to initialize..."
         for i in {1..90}; do
             if nc -z localhost 9094 2>/dev/null; then
                 log_success "CAS (bazel-remote) is ready on port 9094"
-                # Extra wait to ensure it's fully initialized
                 sleep 3
                 return 0
             fi
@@ -132,46 +130,23 @@ start_services() {
         return 1
     fi
     
-    # Check if we're in standalone mode (no external deps) - legacy mode
-    if [ -n "$BENCHMARK_STANDALONE" ]; then
-        log_warn "BENCHMARK_STANDALONE is deprecated. Use BENCHMARK_LOCAL for local execution."
-        start_bazel_remote_local
-        return $?
-    fi
-    
     # Check if we're in local mode (auto-detect and start bazel-remote if needed)
-    if [ -n "$BENCHMARK_LOCAL" ]; then
-        log_info "Local mode: Checking for bazel-remote..."
+    if [ -n "$BENCHMARK_LOCAL" ] || [ -z "$BENCHMARK_SERVICES" ]; then
+        log_info "Checking for bazel-remote..."
         
-        # Check if bazel-remote is already running
-        if nc -z localhost 9094 2>/dev/null; then
+        # Check if bazel-remote is already running (container or native)
+        if docker ps --filter "name=bazel-remote" --format '{{.Names}}' | grep -q "bazel-remote" || \
+           nc -z localhost 9094 2>/dev/null; then
             log_success "CAS (bazel-remote) already running on port 9094"
             return 0
         fi
         
-        # Try to start bazel-remote locally
-        start_bazel_remote_local
+        # Try to start bazel-remote in Docker
+        start_bazel_remote_container
         return $?
     fi
     
-    # Auto-detect mode: if no env vars set, assume local execution and try to start services
-    if [ -z "$BENCHMARK_SERVICES" ] && [ -z "$BENCHMARK_STANDALONE" ] && [ -z "$BENCHMARK_LOCAL" ]; then
-        log_info "Auto-detect mode: Checking for CAS..."
-        
-        # Check if bazel-remote is already running
-        if nc -z localhost 9094 2>/dev/null; then
-            log_success "CAS (bazel-remote) already available on port 9094"
-            return 0
-        fi
-        
-        # Not running, try to start it locally
-        log_info "CAS not found, attempting to start bazel-remote locally..."
-        log_info "(Set BENCHMARK_LOCAL=1 to always start local services, or BENCHMARK_SKIP_SERVICES=1 to skip)"
-        start_bazel_remote_local
-        return $?
-    fi
-    
-    # Verify CAS is available if needed
+    # Verify CAS is available
     if nc -z localhost 9094 2>/dev/null; then
         log_success "CAS (bazel-remote) available on port 9094"
     else
@@ -179,139 +154,171 @@ start_services() {
     fi
 }
 
-# Helper function to start bazel-remote locally
-start_bazel_remote_local() {
-    local bazel_remote_path=""
+# Start bazel-remote in a container
+start_bazel_remote_container() {
+    log_info "Starting bazel-remote container..."
     
-    # Check if bazel-remote binary exists
-    if command -v bazel-remote &> /dev/null; then
-        bazel_remote_path=$(which bazel-remote)
-    elif [ -f "$PROJECT_ROOT/.cache/bazel-remote" ]; then
-        bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
-    else
-        # Try to download bazel-remote binary (Linux x86_64 only)
-        local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-        local arch=$(uname -m)
-        
-        if [ "$os" = "linux" ] && [ "$arch" = "x86_64" ]; then
-            log_info "Downloading bazel-remote..."
-            mkdir -p "$PROJECT_ROOT/.cache"
-            local bazel_remote_version="1.3.23"
-            local download_url="https://github.com/buchgr/bazel-remote/releases/download/v${bazel_remote_version}/bazel-remote-${bazel_remote_version}-linux-x86_64"
-            curl -sL -o "$PROJECT_ROOT/.cache/bazel-remote" "$download_url" 2>/dev/null || true
-            chmod +x "$PROJECT_ROOT/.cache/bazel-remote" 2>/dev/null || true
-            bazel_remote_path="$PROJECT_ROOT/.cache/bazel-remote"
-        else
-            log_warn "Automatic download only supported on Linux x86_64. Current: $os $arch"
+    # Check if a container already exists (stopped)
+    if docker ps -aq --filter "name=bazel-remote" | grep -q .; then
+        log_info "Removing existing bazel-remote container..."
+        docker rm -f bazel-remote >/dev/null 2>&1 || true
+    fi
+    
+    # Create data directory
+    mkdir -p "$RESULTS_DIR/bazel-remote-cache"
+    
+    # Start container
+    docker run -d \
+        --name bazel-remote \
+        --network host \
+        -p 9094:9094 \
+        -p 8080:8080 \
+        -v "$RESULTS_DIR/bazel-remote-cache:/data" \
+        -e BAZEL_REMOTE_DIR=/data \
+        -e BAZEL_REMOTE_MAX_SIZE=1 \
+        buchgr/bazel-remote-cache:latest \
+        --port=9094 \
+        --grpc_port=9094 \
+        --dir=/data \
+        --max_size=1 >/dev/null 2>&1
+    
+    BAZEL_REMOTE_CONTAINER="bazel-remote"
+    
+    # Wait for bazel-remote to be ready
+    for i in {1..60}; do
+        if nc -z localhost 9094 2>/dev/null; then
+            log_success "bazel-remote container ready"
+            return 0
         fi
-    fi
+        if [ $((i % 10)) -eq 0 ]; then
+            log_info "Waiting for bazel-remote... (attempt $i/60)"
+        fi
+        sleep 1
+    done
     
-    if [ -x "$bazel_remote_path" ]; then
-        log_info "Starting bazel-remote on port 9094..."
-        mkdir -p "$RESULTS_DIR/bazel-remote-cache"
-        "$bazel_remote_path" --dir="$RESULTS_DIR/bazel-remote-cache" --port=9094 --grpc_port=9094 &
-        BAZEL_REMOTE_PID=$!
-        
-        # Wait for bazel-remote to be ready
-        for i in {1..30}; do
-            if nc -z localhost 9094 2>/dev/null; then
-                log_success "bazel-remote ready (PID: $BAZEL_REMOTE_PID)"
-                return 0
-            fi
-            sleep 1
-        done
-        log_warn "bazel-remote failed to start within 30 seconds"
-        return 1
-    else
-        log_warn "Could not find or download bazel-remote binary"
-        log_warn "To install bazel-remote: https://github.com/buchgr/bazel-remote#readme"
-        log_warn "Or run: docker run -d -p 9094:9094 buchgr/bazel-remote-cache:latest"
-        return 1
-    fi
+    log_warn "bazel-remote failed to start within 60 seconds"
+    docker logs bazel-remote 2>/dev/null || true
+    return 1
 }
 
 # Stop supporting services
 stop_services() {
-    if [ -n "$BAZEL_REMOTE_PID" ]; then
-        log_info "Stopping bazel-remote (PID: $BAZEL_REMOTE_PID)..."
-        kill $BAZEL_REMOTE_PID 2>/dev/null || true
-        wait $BAZEL_REMOTE_PID 2>/dev/null || true
+    if [ -n "$BAZEL_REMOTE_CONTAINER" ]; then
+        log_info "Stopping bazel-remote container..."
+        docker stop "$BAZEL_REMOTE_CONTAINER" >/dev/null 2>&1 || true
+        docker rm "$BAZEL_REMOTE_CONTAINER" >/dev/null 2>&1 || true
     fi
 }
 
-# Start FerrisRBE server
-start_server() {
-    log_info "Starting FerrisRBE server..."
+# Start FerrisRBE server in container
+start_server_container() {
+    local image_tag="${1:-$LOCAL_IMAGE_TAG}"
+    local container_name="${CONTAINER_NAME_FULL}"
     
-    local server_binary=$(get_server_binary)
+    log_info "Starting FerrisRBE server container: $image_tag"
     
-    if [ -z "$server_binary" ]; then
-        log_error "rbe-server binary not found."
-        log_info "Build with Bazel: bazel build //:rbe-server --config=release"
-        log_info "Or with Cargo: cargo build --release --bin rbe-server"
+    # Verify image exists
+    if ! docker image inspect "$image_tag" >/dev/null 2>&1; then
+        log_error "Image $image_tag not found in Docker"
+        log_info "Available images:"
+        docker images | grep ferrisrbe || true
         exit 1
     fi
     
-    log_info "Using server binary: $server_binary"
-    
-    # Ensure CAS_ENDPOINT is set (for services mode, it's set by workflow)
+    # Ensure CAS_ENDPOINT is set
     if [ -z "$CAS_ENDPOINT" ]; then
         export CAS_ENDPOINT="localhost:9094"
-        log_info "CAS_ENDPOINT not set, using default: $CAS_ENDPOINT"
-    else
-        log_info "Using CAS_ENDPOINT: $CAS_ENDPOINT"
     fi
     
-    "$server_binary" &
-    SERVER_PID=$!
+    log_info "Using CAS_ENDPOINT: $CAS_ENDPOINT"
+    
+    # Run container with host networking for simplicity
+    # This matches how many CI environments work
+    docker run -d \
+        --name "$container_name" \
+        --network host \
+        -p 9092:9092 \
+        -e RBE_PORT=9092 \
+        -e RBE_BIND_ADDRESS=0.0.0.0 \
+        -e RUST_LOG=info \
+        -e CAS_ENDPOINT="$CAS_ENDPOINT" \
+        -e RBE_L1_CACHE_CAPACITY=100000 \
+        -e RBE_L1_CACHE_TTL_SECS=3600 \
+        --memory=512m \
+        --memory-reservation=64m \
+        "$image_tag" >/dev/null 2>&1
+    
+    SERVER_CONTAINER="$container_name"
     
     # Wait for server to be ready
     log_info "Waiting for server to be ready..."
     for i in {1..60}; do
         if nc -z localhost 9092 2>/dev/null; then
-            log_success "Server ready (PID: $SERVER_PID)"
+            log_success "Server container ready"
             return 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+            log_info "Waiting for server... (attempt $i/60)"
+            docker logs "$container_name" --tail 5 2>/dev/null || true
         fi
         sleep 1
     done
     
     log_error "Server failed to start within 60 seconds"
+    docker logs "$container_name" 2>/dev/null || true
     exit 1
 }
 
-# Stop server
-stop_server() {
-    if [ -n "$SERVER_PID" ]; then
-        log_info "Stopping server (PID: $SERVER_PID)..."
-        kill $SERVER_PID 2>/dev/null || true
-        wait $SERVER_PID 2>/dev/null || true
+# Stop server container
+stop_server_container() {
+    local container_name="${1:-$SERVER_CONTAINER}"
+    
+    if [ -n "$container_name" ]; then
+        log_info "Stopping server container: $container_name"
+        docker stop "$container_name" >/dev/null 2>&1 || true
+        docker rm "$container_name" >/dev/null 2>&1 || true
     fi
 }
 
-# Run memory benchmark
-run_memory_benchmark() {
-    log_info "Running memory footprint benchmark..."
+# Get container memory usage
+get_container_memory() {
+    local container_name="${1:-$SERVER_CONTAINER}"
     
-    # Get memory usage via ps (works regardless of container/native)
+    # Get memory usage in MB from docker stats
+    docker stats "$container_name" --no-stream --format "{{.MemUsage}}" 2>/dev/null | \
+        awk '{print $1}' | sed 's/MiB//' | sed 's/GiB/*1024/' | bc 2>/dev/null || echo "0"
+}
+
+# Run memory benchmark using container stats
+run_memory_benchmark() {
+    log_info "Running memory footprint benchmark (container mode)..."
+    
+    # Wait for container to stabilize
+    sleep 3
+    
+    # Collect multiple samples
     for i in {1..5}; do
-        ps -o rss= -p $SERVER_PID 2>/dev/null | awk '{print $1/1024}' || echo "0"
+        get_container_memory "$SERVER_CONTAINER"
         sleep 1
     done | tee "$RESULTS_DIR/memory_${TIMESTAMP}.txt"
     
-    # Parse and store result (first non-zero value)
-    MEMORY_MB=$(grep -v "^0$" "$RESULTS_DIR/memory_${TIMESTAMP}.txt" | head -1)
+    # Parse and store result (median of non-zero values)
+    MEMORY_MB=$(grep -v "^0$" "$RESULTS_DIR/memory_${TIMESTAMP}.txt" | sort -n | head -1)
     if [ -z "$MEMORY_MB" ]; then
         MEMORY_MB="0"
     fi
     
     echo "$MEMORY_MB" > "$RESULTS_DIR/memory_baseline.txt"
     
-    log_success "Memory baseline: ${MEMORY_MB}MB"
+    log_success "Memory baseline: ${MEMORY_MB}MB (container)"
+    
+    # Also get container stats for additional info
+    docker stats "$SERVER_CONTAINER" --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}" > "$RESULTS_DIR/container_stats_${TIMESTAMP}.txt" 2>/dev/null || true
 }
 
 # Run lightweight benchmarks
 run_light_benchmarks() {
-    log_info "=== LIGHTWEIGHT BENCHMARK SUITE ==="
+    log_info "=== LIGHTWEIGHT BENCHMARK SUITE (Container) ==="
     log_info "Running quick tests suitable for PR validation..."
     
     # 1. Memory footprint (quick)
@@ -336,7 +343,7 @@ run_light_benchmarks() {
         --output "$RESULTS_DIR/cache_${TIMESTAMP}.json" || true
     
     # 4. Cold start (single measurement) - measured AFTER bazel-remote is ready
-    log_info "Test 4/5: Cold start time..."
+    log_info "Test 4/5: Cold start time (container)..."
     
     # Ensure bazel-remote is ready before measuring cold start
     log_info "  Verifying bazel-remote is ready..."
@@ -351,34 +358,46 @@ run_light_benchmarks() {
     fi
     
     if nc -z localhost 9094 2>/dev/null; then
-        log_info "  bazel-remote ready, measuring server cold start..."
-        stop_server
-        sleep 1  # Ensure clean shutdown
+        log_info "  bazel-remote ready, measuring container cold start..."
         
-        # Measure ONLY server startup time (bazel-remote is already ready)
+        # Stop current container
+        stop_server_container "$SERVER_CONTAINER"
+        sleep 1
+        
+        # Measure container startup time
         START_TIME=$(date +%s%N)
         
-        # Start server directly without waiting for bazel-remote check
-        local server_binary=$(get_server_binary)
-        export CAS_ENDPOINT="${CAS_ENDPOINT:-localhost:9094}"
-        "$server_binary" &
-        SERVER_PID=$!
+        # Start new container
+        NEW_CONTAINER="${CONTAINER_NAME}-coldstart-${TIMESTAMP}"
+        docker run -d \
+            --name "$NEW_CONTAINER" \
+            --network host \
+            -p 9092:9092 \
+            -e RBE_PORT=9092 \
+            -e RBE_BIND_ADDRESS=0.0.0.0 \
+            -e RUST_LOG=info \
+            -e CAS_ENDPOINT="$CAS_ENDPOINT" \
+            "$LOCAL_IMAGE_TAG" >/dev/null 2>&1
         
         # Wait for server to be ready
-        for i in {1..30}; do
+        for i in {1..60}; do
             if nc -z localhost 9092 2>/dev/null; then
                 END_TIME=$(date +%s%N)
                 COLD_START_MS=$(( (END_TIME - START_TIME) / 1000000 ))
                 echo "$COLD_START_MS" > "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt"
-                log_success "Cold start: ${COLD_START_MS}ms"
+                log_success "Cold start: ${COLD_START_MS}ms (container startup + server ready)"
                 break
             fi
             sleep 0.1
         done
         
+        # Update SERVER_CONTAINER to new one
+        stop_server_container "$SERVER_CONTAINER"
+        SERVER_CONTAINER="$NEW_CONTAINER"
+        
         if ! nc -z localhost 9092 2>/dev/null; then
-            log_error "Server failed to start for cold start measurement"
-            kill $SERVER_PID 2>/dev/null || true
+            log_error "Server container failed to start for cold start measurement"
+            stop_server_container "$NEW_CONTAINER"
         fi
     else
         log_warn "  bazel-remote not available, skipping cold start measurement"
@@ -398,7 +417,7 @@ run_light_benchmarks() {
 
 # Run full benchmarks
 run_full_benchmarks() {
-    log_info "=== FULL BENCHMARK SUITE ==="
+    log_info "=== FULL BENCHMARK SUITE (Container) ==="
     log_info "Running comprehensive tests (this will take time)..."
     
     # 1. Memory footprint (extended)
@@ -436,7 +455,7 @@ run_full_benchmarks() {
         --server localhost:9092 \
         --large-sizes 1 \
         --small-count 100 \
-        --container ferrisrbe-server \
+        --container "$SERVER_CONTAINER" \
         --output "$RESULTS_DIR/streaming_${TIMESTAMP}.json" || true
     
     # 6. Connection churn
@@ -473,19 +492,27 @@ generate_summary() {
     
     SUMMARY_FILE="$RESULTS_DIR/benchmark_summary.md"
     
+    # Get container image info
+    local image_id=$(docker images --format "{{.ID}}" "$LOCAL_IMAGE_TAG" | head -1)
+    local image_created=$(docker images --format "{{.CreatedAt}}" "$LOCAL_IMAGE_TAG" | head -1)
+    local image_size=$(docker images --format "{{.Size}}" "$LOCAL_IMAGE_TAG" | head -1)
+    
     cat > "$SUMMARY_FILE" << EOF
-### Benchmark Results Summary
+### Benchmark Results Summary (Container Mode)
 
 **Mode:** ${MODE}  
 **Timestamp:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
-**Commit:** ${GITHUB_SHA:-N/A}
+**Commit:** ${GITHUB_SHA:-N/A}  
+**Image:** ${LOCAL_IMAGE_TAG}  
+**Image ID:** ${image_id:-N/A}  
+**Image Size:** ${image_size:-N/A}
 
 EOF
     
     # Memory results
     if [ -f "$RESULTS_DIR/memory_baseline.txt" ]; then
         MEMORY=$(cat "$RESULTS_DIR/memory_baseline.txt")
-        echo "#### Memory Footprint" >> "$SUMMARY_FILE"
+        echo "#### Memory Footprint (Container)" >> "$SUMMARY_FILE"
         echo "- **Idle Memory:** ${MEMORY} MB" >> "$SUMMARY_FILE"
         echo "" >> "$SUMMARY_FILE"
         
@@ -501,7 +528,7 @@ EOF
     # Cold start results
     if [ -f "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt" ]; then
         COLD_START=$(cat "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt")
-        echo "#### Cold Start Time" >> "$SUMMARY_FILE"
+        echo "#### Cold Start Time (Container)" >> "$SUMMARY_FILE"
         echo "- **Startup Time:** ${COLD_START}ms" >> "$SUMMARY_FILE"
         echo "" >> "$SUMMARY_FILE"
         
@@ -510,6 +537,15 @@ EOF
         else
             echo "✅ Cold start within expected range" >> "$SUMMARY_FILE"
         fi
+        echo "" >> "$SUMMARY_FILE"
+    fi
+    
+    # Container stats
+    if [ -f "$RESULTS_DIR/container_stats_${TIMESTAMP}.txt" ]; then
+        echo "#### Container Statistics" >> "$SUMMARY_FILE"
+        echo "\`\`\`" >> "$SUMMARY_FILE"
+        cat "$RESULTS_DIR/container_stats_${TIMESTAMP}.txt" >> "$SUMMARY_FILE"
+        echo "\`\`\`" >> "$SUMMARY_FILE"
         echo "" >> "$SUMMARY_FILE"
     fi
     
@@ -526,7 +562,7 @@ EOF
     
     echo "" >> "$SUMMARY_FILE"
     echo "---" >> "$SUMMARY_FILE"
-    echo "*Generated by FerrisRBE Benchmark Suite*" >> "$SUMMARY_FILE"
+    echo "*Generated by FerrisRBE Benchmark Suite (Container Mode)*" >> "$SUMMARY_FILE"
     
     # Also generate JSON for programmatic access
     cat > "$RESULTS_DIR/benchmark_data.json" << EOF
@@ -534,6 +570,12 @@ EOF
     "timestamp": "$TIMESTAMP",
     "mode": "$MODE",
     "commit": "${GITHUB_SHA:-N/A}",
+    "container": {
+        "image": "$LOCAL_IMAGE_TAG",
+        "image_id": "${image_id:-null}",
+        "image_size": "${image_size:-null}",
+        "container_name": "$SERVER_CONTAINER"
+    },
     "results": {
         "memory_mb": $(cat "$RESULTS_DIR/memory_baseline.txt" 2>/dev/null || echo "null"),
         "cold_start_ms": $(cat "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt" 2>/dev/null || echo "null")
@@ -549,19 +591,26 @@ EOF
 
 # Main execution
 main() {
-    log_info "Starting CI Benchmark Suite"
+    log_info "Starting CI Benchmark Suite (Container Mode)"
     log_info "Mode: $MODE"
     log_info "Results directory: $RESULTS_DIR"
     
-    if [ -n "$BENCHMARK_STANDALONE" ]; then
-        log_info "Standalone mode enabled (starting local services)"
+    # Check Docker is available
+    if ! command -v docker &> /dev/null; then
+        log_error "Docker is not installed or not in PATH"
+        exit 1
     fi
+    
+    log_info "Docker version: $(docker --version)"
+    
+    # Build OCI image
+    build_image
     
     # Start supporting services first
     start_services
     
-    # Start server
-    start_server
+    # Start server container
+    start_server_container "$LOCAL_IMAGE_TAG"
     
     # Run appropriate benchmark suite
     case "$MODE" in
