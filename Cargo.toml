@@ -15,7 +15,7 @@ path = "src/bin/worker.rs"
 tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
 prost-types = "0.13"
-tokio = { version = "1.43", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
 dashmap = { version = "6.1", features = ["inline"] }
