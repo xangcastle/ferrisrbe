@@ -24,9 +24,7 @@ NETWORK_NAME="ferrisrbe-benchmark-net"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 CONTAINER_NAME_FULL="${CONTAINER_NAME}-${TIMESTAMP}"
 
-# Image tags
 LOCAL_IMAGE_TAG="ferrisrbe/server:latest"
-OFFICIAL_IMAGE_TAG="xangcastle/ferris-server:latest"
 
 # Colors
 RED='\033[0;31m'

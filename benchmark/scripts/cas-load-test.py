@@ -27,8 +27,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'proto_gen'))
 try:
     from build.bazel.remote.execution.v2 import remote_execution_pb2
     from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
-    from google.bytestream import bytestream_pb2
-    from google.bytestream import bytestream_pb2_grpc
 except ImportError:
     print("Warning: Protocol buffer modules not found. Using mock implementations.")
     print("Install with: pip install grpcio grpcio-tools")
@@ -223,8 +221,7 @@ def run_load_test(
     server: str,
     num_blobs: int,
     blob_size: int,
-    concurrent: int,
-    use_bytestream: bool = False
+    concurrent: int
 ) -> BenchmarkSummary:
     """Run complete load test"""
     
@@ -293,7 +290,7 @@ def main():
     parser.add_argument('--blobs', type=int, default=100, help='Number of blobs to test')
     parser.add_argument('--size', type=int, default=1048576, help='Blob size in bytes (default 1MB)')
     parser.add_argument('--concurrent', type=int, default=10, help='Concurrent operations')
-    parser.add_argument('--bytestream', action='store_true', help='Use ByteStream API instead of CAS')
+
     parser.add_argument('--output', help='Output JSON file for results')
     
     args = parser.parse_args()
@@ -303,8 +300,7 @@ def main():
         server=args.server,
         num_blobs=args.blobs,
         blob_size=args.size,
-        concurrent=args.concurrent,
-        use_bytestream=args.bytestream
+        concurrent=args.concurrent
     )
     
     # Print summary

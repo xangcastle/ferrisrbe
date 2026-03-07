@@ -24,7 +24,6 @@ get_bazel_execution_root() {
 find_bazel_output() {
     local target="$1"  # e.g., "//:rbe-server"
     local workspace="${2:-.}"
-    local output_name="${3:-}"  # Optional: specific output filename
     
     cd "$workspace"
     
@@ -41,10 +40,6 @@ find_bazel_output() {
     # //src:server -> bazel-bin/src/server
     local target_path=$(echo "$target" | sed 's|//||' | sed 's|^:||' | sed 's|:|/|g')
     
-    if [ -n "$output_name" ]; then
-        target_path="$target_path/$output_name"
-    fi
-    
     local full_path="$bazel_bin/$target_path"
     
     if [ -f "$full_path" ]; then
@@ -55,8 +50,7 @@ find_bazel_output() {
     # Try common variations
     local variations=(
         "$bazel_bin/rbe-server"
-        "$bazel_bin/rbe-worker"  
-        "$bazel_bin/$output_name"
+        "$bazel_bin/rbe-worker"
     )
     
     for path in "${variations[@]}"; do
