@@ -16,6 +16,7 @@ permissions:
   contents: read
   security-events: write
   issues: write
+  checks: write
 
 jobs:
   cargo-audit:
