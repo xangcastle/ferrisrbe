@@ -1,0 +1,130 @@
+# FerrisRBE - Benchmark Configuration
+# Uses OCI images built with Bazel (rules_oci)
+# 
+# To build and load images before running:
+#   bazel run //oci:server_load
+#   bazel run //oci:worker_load
+#
+# Or use:
+#   cd benchmark && ./scripts/build-with-bazel.sh image
+
+version: "3.8"
+
+services:
+  # === FERRISRBE SERVER ===
+  ferrisrbe-server:
+    image: ferrisrbe-server:latest  # Built with: bazel run //oci:server_load
+    container_name: ferrisrbe-server
+    ports:
+      - "9092:9092"      # REAPI gRPC
+      - "9093:9093"      # Metrics endpoint (Prometheus)
+    environment:
+      - RBE_PORT=9092
+      - RBE_BIND_ADDRESS=0.0.0.0
+      - RBE_METRICS_PORT=9093
+      - RUST_LOG=info
+      - CAS_ENDPOINT=http://bazel-remote:9094
+      - REDIS_ENDPOINT=redis:6379
+      - RBE_L1_CACHE_CAPACITY=100000
+      - RBE_L1_CACHE_TTL_SECS=3600
+      - RBE_INLINE_OUTPUT_THRESHOLD=1048576
+      # HTTP/2 tuning for benchmarks
+      - RBE_TCP_KEEPALIVE_SECS=30
+      - RBE_HTTP2_KEEPALIVE_INTERVAL_SECS=20
+      - RBE_HTTP2_KEEPALIVE_TIMEOUT_SECS=15
+    networks:
+      - benchmark-network
+    depends_on:
+      - bazel-remote
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # === FERRISRBE WORKER ===
+  ferrisrbe-worker:
+    image: ferrisrbe-worker:latest  # Built with: bazel run //oci:worker_load
+    container_name: ferrisrbe-worker
+    environment:
+      - WORKER_ID=worker-1
+      - SERVER_ENDPOINT=http://ferrisrbe-server:9092
+      - CAS_ENDPOINT=http://bazel-remote:9094
+      - WORKER_TYPE=default
+      - WORKER_LABELS=os=linux,arch=amd64
+      - MAX_CONCURRENT=4
+      - WORKDIR=/workspace
+      - RUST_LOG=info
+      # Connection resilience
+      - RBE_KEEPALIVE_INTERVAL_SECS=20
+      - RBE_KEEPALIVE_TIMEOUT_SECS=15
+      - RBE_TCP_KEEPALIVE_SECS=30
+      # Materializer settings
+      - RBE_DOWNLOAD_TIMEOUT_SECS=300
+      - RBE_MAX_CONCURRENT_DOWNLOADS=10
+      - RBE_USE_HARDLINKS=true
+    volumes:
+      - worker-workspace:/workspace
+    networks:
+      - benchmark-network
+    depends_on:
+      - ferrisrbe-server
+      - bazel-remote
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
+
+  # === BAZEL-REMOTE (CAS) ===
+  bazel-remote:
+    image: buchgr/bazel-remote-cache:v2.4.3
+    container_name: ferrisrbe-cas
+    ports:
+      - "9094:9094"      # gRPC
+      - "8080:8080"      # HTTP
+    volumes:
+      - bazel-remote-data:/data
+    environment:
+      - BAZEL_REMOTE_DIR=/data
+      - BAZEL_REMOTE_MAX_SIZE=10
+      - BAZEL_REMOTE_HTTP_ADDRESS=0.0.0.0:8080
+      - BAZEL_REMOTE_GRPC_ADDRESS=0.0.0.0:9094
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # === REDIS (Metadata Store) ===
+  redis:
+    image: redis:7-alpine
+    container_name: ferrisrbe-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  bazel-remote-data:
+  redis-data:
+  worker-workspace:
+
+networks:
+  benchmark-network:
+    driver: bridge

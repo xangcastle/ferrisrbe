@@ -1,0 +1,97 @@
+# BuildBuddy - Benchmark Configuration
+# Enterprise RBE with UI
+# Reference: https://github.com/buildbuddy-io/buildbuddy
+version: "3.8"
+
+services:
+  # === BUILDBUDDY SERVER ===
+  buildbuddy-server:
+    image: gcr.io/flame-public/buildbuddy-app-enterprise:latest
+    container_name: buildbuddy-server
+    ports:
+      - "9092:1985"      # REAPI gRPC (mapped to standard port)
+      - "8080:8080"      # Web UI
+      - "9093:9093"      # Prometheus metrics
+    volumes:
+      - ./config/buildbuddy-config.yaml:/config/buildbuddy.yaml:ro
+      - buildbuddy-data:/data
+    environment:
+      - JAVA_OPTS=-Xmx4g -Xms2g -XX:+UseG1GC -XX:MaxGCPauseMillis=100
+    command: ["/bin/server", "--config_file=/config/buildbuddy.yaml"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildbuddy-postgres
+      - buildbuddy-redis
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 2G
+
+  # === BUILDBUDDY EXECUTOR ===
+  buildbuddy-executor:
+    image: gcr.io/flame-public/buildbuddy-executor-enterprise:latest
+    container_name: buildbuddy-executor
+    privileged: true
+    volumes:
+      - ./config/buildbuddy-executor-config.yaml:/config/executor.yaml:ro
+      - executor-workspace:/workspace
+    environment:
+      - JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC
+    command: ["/bin/executor", "--config_file=/config/executor.yaml"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildbuddy-server
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+
+  # === POSTGRES FOR BUILDBUDDY ===
+  buildbuddy-postgres:
+    image: postgres:15-alpine
+    container_name: buildbuddy-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=buildbuddy
+      - POSTGRES_PASSWORD=buildbuddy
+      - POSTGRES_DB=buildbuddy
+    volumes:
+      - buildbuddy-postgres-data:/var/lib/postgresql/data
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # === REDIS FOR BUILDBUDDY ===
+  buildbuddy-redis:
+    image: redis:7-alpine
+    container_name: buildbuddy-redis
+    ports:
+      - "6382:6379"      # Different port to avoid conflict
+    volumes:
+      - buildbuddy-redis-data:/data
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  buildbuddy-data:
+  buildbuddy-postgres-data:
+  buildbuddy-redis-data:
+  executor-workspace:
+
+networks:
+  benchmark-network:
+    driver: bridge

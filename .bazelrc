@@ -26,7 +26,8 @@ build --color=yes
 
 # Optimizaciones para release
 build:release --compilation_mode=opt
-build:release --@rules_rust//rust/settings:extra_rustc_flags=-C,opt-level=3,-C,lto=fat,-C,codegen-units=1,-C,panic=abort
+build:release --@rules_rust//rust/settings:extra_rustc_flags=-C,opt-level=3,-C,codegen-units=1,-C,panic=abort,-C,embed-bitcode=yes
+build:release --@rules_rust//rust/settings:lto=thin
 
 # Asegurar que el compilador de C y el Linker también se optimizan al máximo
 build:release --copt=-O3

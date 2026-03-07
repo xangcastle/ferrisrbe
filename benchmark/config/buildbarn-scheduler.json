@@ -1,0 +1,44 @@
+{
+  "httpListenAddress": ":8982",
+  "clientGrpcServers": [
+    {
+      "listenAddresses": [":8982"],
+      "authentication": {
+        "allowAll": true
+      }
+    }
+  ],
+  "workerGrpcServers": [
+    {
+      "listenAddresses": [":8983"],
+      "authentication": {
+        "allowAll": true
+      }
+    }
+  ],
+  "scheduler": {
+    "buildQueue": {
+      "redis": {
+        "endpoint": "buildbarn-redis:6379"
+      }
+    },
+    "actionRouter": {
+      "simple": {}
+    }
+  },
+  "contentAddressableStorage": {
+    "shard": {
+      "shards": [
+        {
+          "backend": {
+            "grpc": {
+              "endpoint": "buildbarn-storage:8981"
+            }
+          },
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "maximumMessageSizeBytes": 16777216
+}

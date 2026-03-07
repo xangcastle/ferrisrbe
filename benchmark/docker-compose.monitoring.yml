@@ -1,0 +1,103 @@
+# Monitoring Stack for Benchmarking
+# Prometheus + Grafana + cAdvisor for container metrics
+version: "3.8"
+
+services:
+  # === PROMETHEUS ===
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: benchmark-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # === GRAFANA ===
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: benchmark-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=benchmark
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - benchmark-network
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # === CADVISOR (Container Metrics) ===
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: benchmark-cadvisor
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # === NODE EXPORTER (Host Metrics) ===
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: benchmark-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  benchmark-network:
+    driver: bridge
+    external: true  # Shared with benchmark stacks
