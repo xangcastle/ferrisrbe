@@ -1,0 +1,17 @@
+{
+  "server": "localhost:9092",
+  "operation": "read",
+  "total_operations": 5000,
+  "concurrent": 50,
+  "success_count": 5000,
+  "hit_count": 5000,
+  "throughput": 138.38576885561284,
+  "latencies_us": {
+    "min": 345.9580000000351,
+    "max": 45388.74999999987,
+    "mean": 7226.176566199999,
+    "p50": 6730.8750000000255,
+    "p95": 13010.291000000063,
+    "p99": 30726.87499999982
+  }
+}

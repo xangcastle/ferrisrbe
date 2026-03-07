@@ -71,6 +71,28 @@ docker-compose -f docker-compose.benchmark.yml up -d
 docker-compose -f docker-compose.benchmark.yml down -v
 ```
 
+### Generate Report from Results
+
+After running benchmarks, generate a comprehensive markdown report:
+
+```bash
+# Generate report from all JSON results
+./scripts/generate-report.sh
+
+# Or specify custom paths
+./scripts/generate-report.sh ../results ../results/my-report.md
+```
+
+This creates:
+- `results/BENCHMARK_REPORT_<timestamp>.md` - Full report with tables and analysis
+- `results/LATEST_REPORT.md` - Symlink to the most recent report
+
+The report includes:
+- Executive summary with pass/fail status
+- Detailed results for each benchmark
+- Comparison with official release (if available)
+- Threshold analysis and recommendations
+
 ## 🆚 Compare Against Official Release
 
 Instead of compiling `main` branch (slow), compare your PR against the **official Docker Hub image**:
@@ -109,6 +131,7 @@ benchmark/
 ├── scripts/
 │   ├── benchmark-ci.sh               # ⭐ Main CI script (container-native)
 │   ├── compare-branches.sh           # ⭐ Compare PR vs official release
+│   ├── generate-report.sh            # ⭐ Generate markdown report from results
 │   ├── check-regression.py           # Regression detection
 │   ├── execution-load-test.py        # Execution API throughput
 │   ├── action-cache-test.py          # AC performance (DashMap)
@@ -118,6 +141,8 @@ benchmark/
 │   ├── cache-stampede-test.py        # Thundering herd test
 │   └── ...
 └── results/                           # Generated results
+    ├── BENCHMARK_REPORT_*.md         # Auto-generated reports
+    └── LATEST_REPORT.md              # Symlink to latest report
 ```
 
 ## 🐕 Dogfooding with Bazel
