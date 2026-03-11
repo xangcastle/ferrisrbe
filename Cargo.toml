@@ -20,7 +20,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
 dashmap = { version = "6.1", features = ["inline"] }
 async-trait = "0.1"
-uuid = { version = "1.13", features = ["v4"] }
+uuid = { version = "1.22", features = ["v4"] }
 parking_lot = "0.12"
 thiserror = "2.0"
 tracing = "0.1"
