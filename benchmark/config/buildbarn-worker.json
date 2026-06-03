@@ -1,0 +1,36 @@
+{
+  "scheduler": {
+    "endpoint": "buildbarn-scheduler:8983"
+  },
+  "contentAddressableStorage": {
+    "shard": {
+      "shards": [
+        {
+          "backend": {
+            "grpc": {
+              "endpoint": "buildbarn-storage:8981"
+            }
+          },
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "buildDirectoryPath": "/worker/build",
+  "cacheDirectoryPath": "/worker/cache",
+  "maximumCacheFileCount": 10000,
+  "maximumCacheSizeBytes": 1073741824,
+  "instanceName": "",
+  "platform": {
+    "properties": [
+      {
+        "name": "OSFamily",
+        "value": "linux"
+      },
+      {
+        "name": "container-image",
+        "value": "docker://marketplace.gcr.io/google/rbe-ubuntu16-04"
+      }
+    ]
+  }
+}

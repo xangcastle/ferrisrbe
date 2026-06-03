@@ -1,0 +1,110 @@
+# Buildbarn - Benchmark Configuration
+# Reference: https://github.com/buildbarn/bb-deployments
+version: "3.8"
+
+services:
+  # === BUILDBARN FRONTEND ===
+  buildbarn-frontend:
+    image: ghcr.io/buildbarn/bb-storage:20250105T152056Z-a3f20b0
+    container_name: buildbarn-frontend
+    ports:
+      - "9092:8980"      # REAPI gRPC (mapped to standard port)
+    volumes:
+      - ./config/buildbarn-frontend.json:/config/frontend.json:ro
+    command: ["/bb/storage/frontend", "/config/frontend.json"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildbarn-scheduler
+      - buildbarn-storage
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # === BUILDBARN SCHEDULER ===
+  buildbarn-scheduler:
+    image: ghcr.io/buildbarn/bb-scheduler:20250105T152056Z-a3f20b0
+    container_name: buildbarn-scheduler
+    ports:
+      - "9094:8982"      # Scheduler gRPC
+    volumes:
+      - ./config/buildbarn-scheduler.json:/config/scheduler.json:ro
+    command: ["/bb/scheduler", "/config/scheduler.json"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildbarn-storage
+      - buildbarn-redis
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  # === BUILDBARN WORKER ===
+  buildbarn-worker:
+    image: ghcr.io/buildbarn/bb-worker:20250105T152056Z-a3f20b0
+    container_name: buildbarn-worker
+    privileged: true
+    volumes:
+      - ./config/buildbarn-worker.json:/config/worker.json:ro
+      - worker-workspace:/worker
+    command: ["/bb/worker", "/config/worker.json"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildbarn-scheduler
+      - buildbarn-storage
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  # === BUILDBARN STORAGE ===
+  buildbarn-storage:
+    image: ghcr.io/buildbarn/bb-storage:20250105T152056Z-a3f20b0
+    container_name: buildbarn-storage
+    ports:
+      - "9095:8981"      # Storage gRPC
+    volumes:
+      - ./config/buildbarn-storage.json:/config/storage.json:ro
+      - buildbarn-storage-data:/storage
+    command: ["/bb/storage/storage", "/config/storage.json"]
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+        reservations:
+          memory: 1G
+
+  # === REDIS FOR BUILDBARN ===
+  buildbarn-redis:
+    image: redis:7-alpine
+    container_name: buildbarn-redis
+    ports:
+      - "6381:6379"      # Different port to avoid conflict
+    volumes:
+      - buildbarn-redis-data:/data
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  buildbarn-storage-data:
+  buildbarn-redis-data:
+  worker-workspace:
+
+networks:
+  benchmark-network:
+    driver: bridge
