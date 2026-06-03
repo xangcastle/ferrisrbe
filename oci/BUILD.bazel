@@ -4,7 +4,7 @@ Este archivo define las imágenes de contenedor para el servidor y worker de Fer
 usando rules_oci.
 """
 
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 
@@ -149,6 +149,14 @@ oci_image_index(
     visibility = ["//visibility:public"],
 )
 
+# Push multi-plataforma del servidor (usa DOCKER_CONFIG o --credential-helper)
+oci_push(
+    name = "server_push",
+    image = ":server_multiplatform",
+    repository = "docker.io/xangcastle/ferris-server",
+    visibility = ["//visibility:public"],
+)
+
 # Target principal para cargar en Docker el servidor (ARM64 para Mac local)
 oci_load(
     name = "server_load",
@@ -165,6 +173,14 @@ oci_load(
     visibility = ["//visibility:public"],
 )
 
+# Target para cargar imagen ARM64 (para CI multi-plataforma)
+oci_load(
+    name = "server_load_arm64",
+    image = ":server_image_arm64",
+    repo_tags = ["ferrisrbe/server:latest"],
+    visibility = ["//visibility:public"],
+)
+
 # Índice OCI del worker
 oci_image_index(
     name = "worker_multiplatform",
@@ -172,6 +188,14 @@ oci_image_index(
         ":worker_image_amd64",
         ":worker_image_arm64",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# Push multi-plataforma del worker (usa DOCKER_CONFIG o --credential-helper)
+oci_push(
+    name = "worker_push",
+    image = ":worker_multiplatform",
+    repository = "docker.io/xangcastle/ferris-worker",
     visibility = ["//visibility:public"],
 )
 
@@ -187,6 +211,14 @@ oci_load(
 oci_load(
     name = "worker_load_amd64",
     image = ":worker_image_amd64",
+    repo_tags = ["ferrisrbe/worker:latest"],
+    visibility = ["//visibility:public"],
+)
+
+# Target para cargar imagen ARM64 (para CI multi-plataforma)
+oci_load(
+    name = "worker_load_arm64",
+    image = ":worker_image_arm64",
     repo_tags = ["ferrisrbe/worker:latest"],
     visibility = ["//visibility:public"],
 )
