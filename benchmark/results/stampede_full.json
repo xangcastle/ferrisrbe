@@ -1,0 +1,16 @@
+{
+  "server": "localhost:9092",
+  "total_requests": 2000,
+  "concurrent": 100,
+  "cache_hits": 0,
+  "cache_misses": 2000,
+  "errors": 0,
+  "latencies_ms": {
+    "min": 4.7489589999999975,
+    "max": 51.38925,
+    "mean": 16.126950702,
+    "p50": 15.67260450000002,
+    "p95": 28.381042000000022,
+    "p99": 36.462875000000004
+  }
+}

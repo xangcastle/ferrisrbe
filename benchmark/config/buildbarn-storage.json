@@ -1,0 +1,52 @@
+{
+  "blobstore": {
+    "contentAddressableStorage": {
+      "sharding": {
+        "hashInitialization": 11946695773637837490,
+        "shards": [
+          {
+            "backend": {
+              "local": {
+                "keyLocationMap": {
+                  "file": {
+                    "path": "/storage/key_location_map",
+                    "sizeBytes": 10000000
+                  }
+                },
+                "keyLocationMapMaximumGetAttempts": 8,
+                "keyLocationMapMaximumPutAttempts": 32,
+                "oldBlockFiles": [
+                  {
+                    "path": "/storage/old_blocks",
+                    "sizeBytes": 10000000000
+                  }
+                ],
+                "currentBlockFile": {
+                  "path": "/storage/current_blocks",
+                  "sizeBytes": 10000000000
+                }
+              }
+            },
+            "weight": 1
+          }
+        ]
+      }
+    },
+    "actionCache": {
+      "local": {
+        "path": "/storage/ac",
+        "sizeBytes": 1000000000
+      }
+    }
+  },
+  "httpListenAddress": ":8981",
+  "grpcServers": [
+    {
+      "listenAddresses": [":8981"],
+      "authentication": {
+        "allowAll": true
+      }
+    }
+  ],
+  "maximumMessageSizeBytes": 16777216
+}
