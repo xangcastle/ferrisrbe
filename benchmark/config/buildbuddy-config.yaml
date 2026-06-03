@@ -1,0 +1,51 @@
+# BuildBuddy Configuration
+# Minimal config for benchmarking
+
+app:
+  build_buddy_url: "http://localhost:8080"
+  events_api_url: "grpc://localhost:1985"
+  cache_api_url: "grpc://localhost:1985"
+  remote_execution_api_url: "grpc://localhost:1985"
+  no_default_user_group: true
+
+database:
+  data_source: "postgres://buildbuddy:buildbuddy@buildbuddy-postgres:5432/buildbuddy?sslmode=disable"
+
+storage:
+  disk:
+    root_directory: /data/storage
+
+cache:
+  disk:
+    root_directory: /data/cache
+    part_size_bytes: 30000000
+    partitions:
+      - id: "default"
+        max_size_bytes: 10000000000
+
+remote_execution:
+  enabled: true
+  default_pool_name: "default"
+  pools:
+    - name: "default"
+      os: "linux"
+      architecture: "amd64"
+  redis_target: "buildbuddy-redis:6379"
+
+executor:
+  enabled: false  # Run separately
+
+auth:
+  enable_anonymous_usage: true
+
+api:
+  enable_api: true
+
+github:
+  enable_github: false
+
+integrations:
+  enable_ci_runner: false
+
+prometheus:
+  port: 9093
