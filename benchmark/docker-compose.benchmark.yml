@@ -1,0 +1,104 @@
+# FerrisRBE - Optimized Benchmark Configuration
+# 
+# This is a lightweight Docker Compose setup specifically designed for benchmarking.
+# It uses the OCI images built with Bazel (rules_oci) and includes only essential
+# services for performance testing.
+#
+# Key differences from docker-compose.ferrisrbe.yml:
+# - No worker (tests server in isolation)
+# - No Redis (uses in-memory cache only)
+# - Resource limits tuned for benchmarks
+# - Health checks disabled for faster startup
+#
+# Usage:
+#   # Build image with Bazel first
+#   bazel run //oci:server_load_amd64
+#   
+#   # Run benchmarks
+#   cd benchmark
+#   docker-compose -f docker-compose.benchmark.yml up -d
+#   ./scripts/benchmark-ci.sh light
+#   docker-compose -f docker-compose.benchmark.yml down
+
+version: "3.8"
+
+services:
+  # === FERRISRBE SERVER (Under Test) ===
+  ferrisrbe-server:
+    image: ferrisrbe/server:latest  # Built with: bazel run //oci:server_load_amd64
+    container_name: ferrisrbe-benchmark-server
+    ports:
+      - "9092:9092"      # REAPI gRPC
+    environment:
+      - RBE_PORT=9092
+      - RBE_BIND_ADDRESS=0.0.0.0
+      - RUST_LOG=info
+      - CAS_ENDPOINT=http://bazel-remote:9094
+      # Disable Redis for pure benchmark testing (in-memory only)
+      # - REDIS_ENDPOINT=redis:6379
+      - RBE_L1_CACHE_CAPACITY=100000
+      - RBE_L1_CACHE_TTL_SECS=3600
+      - RBE_INLINE_OUTPUT_THRESHOLD=1048576
+      # HTTP/2 tuning for benchmarks
+      - RBE_TCP_KEEPALIVE_SECS=30
+      - RBE_HTTP2_KEEPALIVE_INTERVAL_SECS=20
+      - RBE_HTTP2_KEEPALIVE_TIMEOUT_SECS=15
+    networks:
+      - benchmark-network
+    depends_on:
+      - bazel-remote
+    # Resource limits for consistent benchmarking
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+        reservations:
+          memory: 64M
+    # No health checks for faster benchmark startup
+    healthcheck:
+      disable: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # === BAZEL-REMOTE (CAS) - Only Required Dependency ===
+  bazel-remote:
+    image: buchgr/bazel-remote-cache:v2.4.3
+    container_name: ferrisrbe-benchmark-cas
+    ports:
+      - "9094:9094"      # gRPC
+      - "8080:8080"      # HTTP (optional, for debugging)
+    volumes:
+      - bazel-remote-data:/data
+    environment:
+      - BAZEL_REMOTE_DIR=/data
+      - BAZEL_REMOTE_MAX_SIZE=1  # 1GB max for benchmarks
+      - BAZEL_REMOTE_HTTP_ADDRESS=0.0.0.0:8080
+      - BAZEL_REMOTE_GRPC_ADDRESS=0.0.0.0:9094
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  bazel-remote-data:
+    driver: local
+
+networks:
+  benchmark-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
