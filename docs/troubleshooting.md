@@ -91,18 +91,41 @@ RBE_KEEPALIVE_TIMEOUT_SECS: "15"
 
 ### Solutions
 
-1. Verify cache is working:
+#### Advanced Diagnosis Workflow
+
+When you experience zero remote cache hits despite identical action IDs, follow this workflow:
+
+**Step 0: Always Clean First**
+Local disk cache hits can mask remote results. Always start with a clean state before investigating:
+```bash
+bazel clean
+```
+
+**Step 1: Inspect Build Event Protocol (BEP)**
+Extract the canonical command line using BEP to verify your configuration and find why the remote cache was silently disabled or missed by inherited `.bazelrc` files. Generating a JSON file is the most effective way:
+```bash
+bazel build --config=remote //... \
+  --build_event_json_file=bep.json
+```
+
+**Step 2: Instant Diagnostic Filter**
+The resulting `bep.json` file can be massive. Instead of reading it manually, use `jq` to instantly filter and extract the exact evaluated command line properties in milliseconds:
+```bash
+jq -c 'select(has("structuredCommandLine")) | .structuredCommandLine' bep.json
+```
+
+**Step 3: Verify Cache is Working**
 ```bash
 bazel build --config=remote //... 2>&1 | grep "remote cache hit"
 ```
 
-2. Check action determinism:
+**Step 4: Check Action Determinism**
 ```bash
 bazel build --config=remote //... && \
 bazel build --config=remote //... 2>&1 | grep "cache hit"
 ```
 
-3. Verify cache storage:
+**Step 5: Verify Cache Storage**
 ```bash
 kubectl exec -n rbe deploy/ferrisrbe-bazel-remote -- \
   ls -la /data/cas
