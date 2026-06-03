@@ -5,8 +5,8 @@
 //! - Worker management and materialization
 //! - Shared types and utilities
 
-pub mod cas;
 pub mod cache;
+pub mod cas;
 pub mod execution;
 pub mod types;
 pub mod version;
@@ -20,17 +20,20 @@ pub mod proto {
             pub mod semver {
                 include!(concat!(env!("OUT_DIR"), "/build.bazel.semver.rs"));
             }
-            
+
             pub mod remote {
                 pub mod execution {
                     pub mod v2 {
-                        include!(concat!(env!("OUT_DIR"), "/build.bazel.remote.execution.v2.rs"));
+                        include!(concat!(
+                            env!("OUT_DIR"),
+                            "/build.bazel.remote.execution.v2.rs"
+                        ));
                     }
                 }
             }
         }
     }
-    
+
     /// Google API protobuf definitions
     pub mod google {
         pub mod bytestream {

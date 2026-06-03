@@ -1,5 +1,3 @@
-
-
 use tracing::debug;
 
 use crate::proto::build::bazel::remote::execution::v2::ServerCapabilities;
@@ -27,23 +25,17 @@ impl Default for Bazel7Handler {
 #[async_trait::async_trait]
 impl BazelVersionHandler for Bazel7Handler {
     fn version_range(&self) -> (BazelVersion, Option<BazelVersion>) {
-
         (BazelVersion::new(7, 0, 0), Some(BazelVersion::new(8, 0, 0)))
     }
 
     fn adapt_capabilities(&self, caps: &mut ServerCapabilities, version: BazelVersion) {
-        debug!(
-            "Adapting capabilities for Bazel 7.x (version {})",
-            version
-        );
+        debug!("Adapting capabilities for Bazel 7.x (version {})", version);
 
         if self.prefers_v2_4(version) {
-
             caps.deprecated_api_version = Some(reapi_v2_0_semver());
             caps.low_api_version = Some(reapi_v2_0_semver());
             caps.high_api_version = Some(reapi_v2_4_semver());
         } else {
-
             caps.deprecated_api_version = None;
             caps.low_api_version = Some(reapi_v2_0_semver());
             caps.high_api_version = Some(reapi_v2_3_semver());
@@ -56,7 +48,6 @@ impl BazelVersionHandler for Bazel7Handler {
 
     fn requires_field(&self, field: ReapiField) -> bool {
         match field {
-
             ReapiField::DeprecatedApiVersion => false,
 
             ReapiField::LowApiVersion | ReapiField::HighApiVersion => true,

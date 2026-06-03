@@ -1,4 +1,3 @@
-
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::info;
@@ -10,8 +9,8 @@ use crate::proto::build::bazel::remote::execution::v2::{
     },
     BatchReadBlobsRequest, BatchReadBlobsResponse, BatchUpdateBlobsRequest,
     BatchUpdateBlobsResponse, Digest, FindMissingBlobsRequest, FindMissingBlobsResponse,
-    GetTreeRequest, GetTreeResponse,
-    SplitBlobRequest, SplitBlobResponse, SpliceBlobRequest, SpliceBlobResponse,
+    GetTreeRequest, GetTreeResponse, SpliceBlobRequest, SpliceBlobResponse, SplitBlobRequest,
+    SplitBlobResponse,
 };
 use crate::proto::google::rpc::Status as RpcStatus;
 
@@ -20,7 +19,7 @@ use crate::types::DigestInfo;
 use std::sync::Arc;
 
 /// CAS (Content Addressable Storage) Service
-/// 
+///
 /// Implements the REAPI v2 ContentAddressableStorage interface.
 /// All blobs are stored via the shared CasBackend, ensuring consistency
 /// with ByteStreamService.
@@ -42,12 +41,12 @@ impl CasService {
             .max_decoding_message_size(max_msg_size)
             .max_encoding_message_size(max_msg_size)
     }
-    
+
     /// Convert REAPI Digest to internal DigestInfo
     fn to_digest_info(digest: &Digest) -> DigestInfo {
         DigestInfo::new(&digest.hash, digest.size_bytes)
     }
-    
+
     /// Convert CasError to tonic Status
     fn to_status(err: CasError) -> Status {
         match err {
@@ -102,7 +101,7 @@ impl ContentAddressableStorage for CasService {
                 .digest
                 .clone()
                 .ok_or_else(|| Status::invalid_argument("Missing digest"))?;
-            
+
             let digest_info = Self::to_digest_info(&digest);
             let data = bytes::Bytes::from(blob_req.data);
             let hash = digest.hash.clone();
@@ -148,7 +147,7 @@ impl ContentAddressableStorage for CasService {
         for digest in req.digests {
             let digest_info = Self::to_digest_info(&digest);
             let hash = digest.hash.clone();
-            
+
             match self.backend.read(&digest_info).await {
                 Ok(Some(data)) => {
                     // REAPI v2.4: Use RpcStatus instead of status_code
@@ -213,7 +212,7 @@ impl ContentAddressableStorage for CasService {
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
-    
+
     // REAPI v2.4: New optional methods - basic implementation
     async fn split_blob(
         &self,
@@ -222,7 +221,7 @@ impl ContentAddressableStorage for CasService {
         // Not implemented - returns error
         Err(Status::unimplemented("SplitBlob not implemented"))
     }
-    
+
     async fn splice_blob(
         &self,
         _request: Request<SpliceBlobRequest>,

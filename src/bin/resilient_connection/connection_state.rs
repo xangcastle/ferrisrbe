@@ -32,9 +32,7 @@ impl ConnectionState {
     pub fn can_reconnect(&self) -> bool {
         matches!(
             self,
-            ConnectionState::Disconnected
-                | ConnectionState::Failed
-                | ConnectionState::Reconnecting
+            ConnectionState::Disconnected | ConnectionState::Failed | ConnectionState::Reconnecting
         )
     }
 
@@ -148,7 +146,10 @@ mod tests {
         let mut sm = StateMachine::new();
         assert_eq!(sm.current(), ConnectionState::Disconnected);
 
-        sm.transition_to(ConnectionState::Connecting, Some("Starting connection".to_string()));
+        sm.transition_to(
+            ConnectionState::Connecting,
+            Some("Starting connection".to_string()),
+        );
         assert_eq!(sm.current(), ConnectionState::Connecting);
         assert_eq!(sm.transition_count(), 1);
 

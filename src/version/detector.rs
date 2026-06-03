@@ -1,5 +1,3 @@
-
-
 use tonic::Request;
 use tracing::{debug, trace};
 
@@ -34,7 +32,6 @@ impl GrpcMetadataDetector {
     }
 
     fn extract_from_binary_metadata(&self, metadata: &[u8]) -> Option<BazelVersion> {
-
         if let Ok(s) = std::str::from_utf8(metadata) {
             return BazelVersion::parse(s.trim());
         }

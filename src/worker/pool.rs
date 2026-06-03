@@ -1,5 +1,3 @@
-
-
 use super::{ActionResult, WorkerError, WorkerId, WorkerState};
 use crate::execution::scheduler::ExecutableAction;
 use std::collections::VecDeque;
@@ -9,7 +7,6 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 pub struct WorkerPool {
-
     config: PoolConfig,
 
     available: Arc<Mutex<Vec<WorkerHandle>>>,
@@ -24,7 +21,6 @@ pub struct WorkerPool {
 
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
-
     pub max_workers: usize,
 
     pub min_workers: usize,
@@ -54,7 +50,6 @@ pub struct WorkerHandle {
 }
 
 impl WorkerPool {
-
     pub fn new(config: PoolConfig) -> Self {
         let (completion_tx, completion_rx) = mpsc::channel(100);
 
@@ -99,7 +94,6 @@ impl WorkerPool {
         let deadline = Instant::now() + self.config.worker_timeout;
 
         loop {
-
             {
                 let mut available = self.available.lock().await;
                 if let Some(worker) = available.pop() {
@@ -168,7 +162,6 @@ impl WorkerPool {
     }
 
     pub async fn execute(&self, action: ExecutableAction) -> Result<ActionResult, WorkerError> {
-
         let worker = self.acquire_worker().await?;
         let worker_id = worker.id;
 

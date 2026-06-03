@@ -1,5 +1,3 @@
-
-
 #[allow(unused_imports)]
 use bytes::Bytes;
 use tokio_stream::wrappers::ReceiverStream;
@@ -7,17 +5,17 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
 use crate::cache::action_cache::L1ActionCache;
-use crate::cas::SharedCasBackend;
 #[allow(unused_imports)]
 use crate::cas::CasBackend;
+use crate::cas::SharedCasBackend;
 use crate::execution::output_handler::OutputHandler;
 use crate::execution::results::ResultsStore;
 use crate::execution::scheduler::{ExecutableAction, MultiLevelScheduler, QueuePriority};
 use crate::execution::state_machine::StateMachineManager;
 use crate::proto::build::bazel::remote::execution::v2::{
     execution_server::{Execution, ExecutionServer},
-    Action, ActionResult, Command, Digest, ExecuteRequest, ExecuteResponse, OutputDirectory, OutputFile,
-    WaitExecutionRequest,
+    Action, ActionResult, Command, Digest, ExecuteRequest, ExecuteResponse, OutputDirectory,
+    OutputFile, WaitExecutionRequest,
 };
 use crate::proto::google::longrunning::{operation::Result as OpResult, Operation};
 use crate::proto::google::rpc::Status as RpcStatus;
@@ -80,8 +78,14 @@ impl ExecutionService {
         let action = match self.fetch_action(&action_digest).await {
             Ok(Some(action)) => action,
             Ok(None) => {
-                warn!("Action not found in CAS: {}", action_digest.hash_to_string());
-                return Err(Status::not_found(format!("Action not found: {}", action_digest.hash_to_string())));
+                warn!(
+                    "Action not found in CAS: {}",
+                    action_digest.hash_to_string()
+                );
+                return Err(Status::not_found(format!(
+                    "Action not found: {}",
+                    action_digest.hash_to_string()
+                )));
             }
             Err(e) => {
                 warn!("Failed to fetch action from CAS: {}", e);
@@ -89,15 +93,22 @@ impl ExecutionService {
             }
         };
 
-        let command_digest = action.command_digest
+        let command_digest = action
+            .command_digest
             .ok_or_else(|| Status::invalid_argument("Action missing command_digest"))?;
         let command_digest_info = DigestInfo::new(&command_digest.hash, command_digest.size_bytes);
-        
+
         let command = match self.fetch_command(&command_digest_info).await {
             Ok(Some(cmd)) => cmd,
             Ok(None) => {
-                warn!("Command not found in CAS: {}", command_digest_info.hash_to_string());
-                return Err(Status::not_found(format!("Command not found: {}", command_digest_info.hash_to_string())));
+                warn!(
+                    "Command not found in CAS: {}",
+                    command_digest_info.hash_to_string()
+                );
+                return Err(Status::not_found(format!(
+                    "Command not found: {}",
+                    command_digest_info.hash_to_string()
+                )));
             }
             Err(e) => {
                 warn!("Failed to fetch command from CAS: {}", e);
@@ -105,7 +116,8 @@ impl ExecutionService {
             }
         };
 
-        let input_root_digest = action.input_root_digest
+        let input_root_digest = action
+            .input_root_digest
             .map(|d| DigestInfo::new(&d.hash, d.size_bytes));
 
         let (output_files, output_directories) = if !command.output_paths.is_empty() {
@@ -121,8 +133,15 @@ impl ExecutionService {
             input_digests: Vec::new(),
             command: command.arguments,
             // REAPI v2.4: timeout is Option<prost_types::Duration>
-            timeout: action.timeout
-                .and_then(|d| if d.seconds > 0 { Some(Duration::from_secs(d.seconds as u64)) } else { None })
+            timeout: action
+                .timeout
+                .and_then(|d| {
+                    if d.seconds > 0 {
+                        Some(Duration::from_secs(d.seconds as u64))
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or_else(|| Duration::from_secs(300)),
             priority: QueuePriority::Medium,
             output_files,
@@ -191,17 +210,15 @@ impl ExecutionService {
         let output_files: Vec<OutputFile> = result
             .output_files
             .iter()
-            .map(|f| {
-                OutputFile {
-                    path: f.path.clone(),
-                    digest: Some(Digest {
-                        hash: f.digest.clone(),
-                        size_bytes: f.size_bytes,
-                    }),
-                    is_executable: f.is_executable,
-                    contents: vec![],
-                    node_properties: None,
-                }
+            .map(|f| OutputFile {
+                path: f.path.clone(),
+                digest: Some(Digest {
+                    hash: f.digest.clone(),
+                    size_bytes: f.size_bytes,
+                }),
+                is_executable: f.is_executable,
+                contents: vec![],
+                node_properties: None,
             })
             .collect();
 
@@ -305,28 +322,36 @@ impl Execution for ExecutionService {
                 #[allow(deprecated)]
                 let exec_response = ExecuteResponse {
                     result: Some(ActionResult {
-                        output_files: cached_result.output_files.iter().map(|f| OutputFile {
-                            path: f.path.clone(),
-                            digest: Some(Digest {
-                                hash: f.digest.hash_to_string(),
-                                size_bytes: f.digest.size,
-                            }),
-                            is_executable: f.is_executable,
-                            contents: vec![],
-                            node_properties: None,
-                        }).collect(),
-                        output_directories: cached_result.output_directories.iter().map(|d| {
-                            let digest = &d.tree_digest;
-                            OutputDirectory {
-                                path: d.path.clone(),
-                                tree_digest: Some(Digest {
-                                    hash: digest.hash_to_string(),
-                                    size_bytes: digest.size,
+                        output_files: cached_result
+                            .output_files
+                            .iter()
+                            .map(|f| OutputFile {
+                                path: f.path.clone(),
+                                digest: Some(Digest {
+                                    hash: f.digest.hash_to_string(),
+                                    size_bytes: f.digest.size,
                                 }),
-                                is_topologically_sorted: false,
-                                root_directory_digest: None,
-                            }
-                        }).collect(),
+                                is_executable: f.is_executable,
+                                contents: vec![],
+                                node_properties: None,
+                            })
+                            .collect(),
+                        output_directories: cached_result
+                            .output_directories
+                            .iter()
+                            .map(|d| {
+                                let digest = &d.tree_digest;
+                                OutputDirectory {
+                                    path: d.path.clone(),
+                                    tree_digest: Some(Digest {
+                                        hash: digest.hash_to_string(),
+                                        size_bytes: digest.size,
+                                    }),
+                                    is_topologically_sorted: false,
+                                    root_directory_digest: None,
+                                }
+                            })
+                            .collect(),
                         exit_code: cached_result.exit_code,
                         stdout_raw: vec![],
                         stdout_digest: cached_result.stdout_digest.map(|d| Digest {
@@ -361,7 +386,9 @@ impl Execution for ExecutionService {
                     let mut buf = Vec::new();
                     ProstMessage::encode(&exec_response, &mut buf).expect("encode failed");
                     Any {
-                        type_url: "type.googleapis.com/build.bazel.remote.execution.v2.ExecuteResponse".to_string(),
+                        type_url:
+                            "type.googleapis.com/build.bazel.remote.execution.v2.ExecuteResponse"
+                                .to_string(),
                         value: buf,
                     }
                 });
@@ -414,15 +441,16 @@ impl Execution for ExecutionService {
 
                         if done {
                             let result = results_store.get(operation_id);
-                            
+
                             let op_result = if let Some(r) = result {
-                                let exec_response = Self::build_execute_response_with_handler(
-                                    &r, &output_handler
-                                ).await;
+                                let exec_response =
+                                    Self::build_execute_response_with_handler(&r, &output_handler)
+                                        .await;
 
                                 OpResult::Response({
                                     let mut buf = Vec::new();
-                                    ProstMessage::encode(&exec_response, &mut buf).expect("encode failed");
+                                    ProstMessage::encode(&exec_response, &mut buf)
+                                        .expect("encode failed");
                                     Any {
                                         type_url: "type.googleapis.com/build.bazel.remote.execution.v2.ExecuteResponse".to_string(),
                                         value: buf,
@@ -444,7 +472,8 @@ impl Execution for ExecutionService {
                                         server_logs: std::collections::HashMap::new(),
                                     };
                                     let mut buf = Vec::new();
-                                    ProstMessage::encode(&exec_response, &mut buf).expect("encode failed");
+                                    ProstMessage::encode(&exec_response, &mut buf)
+                                        .expect("encode failed");
                                     Any {
                                         type_url: "type.googleapis.com/build.bazel.remote.execution.v2.ExecuteResponse".to_string(),
                                         value: buf,
@@ -514,7 +543,6 @@ impl Execution for ExecutionService {
                     let done = sm.is_terminal().await;
 
                     if done {
-
                         let result = results_store.get(op_id);
 
                         let op_result = result.map(|r| {

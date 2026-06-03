@@ -110,22 +110,20 @@ mod tests {
     #[test]
     fn test_immediate_reconnection() {
         let mut policy = ReconnectionPolicy::new(ReconnectionStrategy::Immediate, 5);
-        
+
         for _ in 0..5 {
             let delay = policy.next_delay().unwrap();
             assert_eq!(delay, Duration::ZERO);
         }
-        
+
         assert!(policy.next_delay().is_none());
     }
 
     #[test]
     fn test_fixed_delay() {
-        let mut policy = ReconnectionPolicy::new(
-            ReconnectionStrategy::FixedDelay { delay_ms: 1000 },
-            3,
-        );
-        
+        let mut policy =
+            ReconnectionPolicy::new(ReconnectionStrategy::FixedDelay { delay_ms: 1000 }, 3);
+
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(1000));
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(1000));
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(1000));
@@ -142,7 +140,7 @@ mod tests {
             },
             5,
         );
-        
+
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(100));
         // 100 * 2^1 = 200
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(200));
@@ -162,7 +160,7 @@ mod tests {
             },
             5,
         );
-        
+
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(1000));
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(2000));
         assert_eq!(policy.next_delay().unwrap(), Duration::from_millis(4000));
@@ -172,15 +170,13 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut policy = ReconnectionPolicy::new(
-            ReconnectionStrategy::FixedDelay { delay_ms: 1000 },
-            3,
-        );
-        
+        let mut policy =
+            ReconnectionPolicy::new(ReconnectionStrategy::FixedDelay { delay_ms: 1000 }, 3);
+
         policy.next_delay();
         policy.next_delay();
         assert_eq!(policy.current_attempt(), 2);
-        
+
         policy.reset();
         assert_eq!(policy.current_attempt(), 0);
         assert!(!policy.is_exhausted());

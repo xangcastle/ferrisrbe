@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 /// Adaptive keepalive that adjusts interval based on network conditions
-/// 
+///
 /// Strategy:
 /// - Start with conservative interval (e.g., 15s)
 /// - If all keepalives succeed for N consecutive attempts, increase interval (up to max)
@@ -157,7 +157,7 @@ impl AdaptiveKeepalive {
         }
 
         let new_interval = (self.current_interval_secs * 5 / 4).min(self.max_interval_secs);
-        
+
         if new_interval != self.current_interval_secs {
             info!(
                 "Increasing keepalive interval: {}s -> {}s (after {} consecutive successes)",
@@ -176,7 +176,7 @@ impl AdaptiveKeepalive {
         }
 
         let new_interval = (self.current_interval_secs / 2).max(self.min_interval_secs);
-        
+
         if new_interval != self.current_interval_secs {
             info!(
                 "Decreasing keepalive interval: {}s -> {}s (after {} consecutive failures)",
@@ -235,9 +235,9 @@ mod tests {
     #[test]
     fn test_failure_decreases_interval() {
         let mut ak = AdaptiveKeepalive::new(20, 5, 60, 3);
-        
+
         ak.record_failure();
-        
+
         // Should decrease by 50%
         assert_eq!(ak.current_interval().as_secs(), 10);
     }
@@ -245,10 +245,10 @@ mod tests {
     #[test]
     fn test_failure_respects_min() {
         let mut ak = AdaptiveKeepalive::new(10, 5, 60, 3);
-        
+
         ak.record_failure();
         assert_eq!(ak.current_interval().as_secs(), 5);
-        
+
         ak.record_failure();
         assert_eq!(ak.current_interval().as_secs(), 5);
     }
@@ -256,22 +256,22 @@ mod tests {
     #[test]
     fn test_success_increases_interval() {
         let mut ak = AdaptiveKeepalive::new(16, 5, 60, 3);
-        
+
         ak.record_success(Duration::from_millis(10));
         ak.record_success(Duration::from_millis(10));
         ak.record_success(Duration::from_millis(10));
-        
+
         assert_eq!(ak.current_interval().as_secs(), 20);
     }
 
     #[test]
     fn test_stats() {
         let mut ak = AdaptiveKeepalive::new(15, 5, 60, 3);
-        
+
         ak.record_success(Duration::from_millis(10));
         ak.record_success(Duration::from_millis(20));
         ak.record_success(Duration::from_millis(30));
-        
+
         let stats = ak.stats();
         assert_eq!(stats.consecutive_successes, 3);
         assert_eq!(stats.average_rtt_ms, 20);

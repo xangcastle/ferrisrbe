@@ -9,7 +9,7 @@
 //! This completes the REAPI execution cycle: Input -> Execute -> Output
 //!
 //! ## Enterprise-Grade Streaming Architecture
-//! 
+//!
 //! This module implements Zero-Allocation streaming for large files to prevent OOM:
 //! - Files > 4MB: Use ByteStream API with disk-to-network streaming
 //! - Files <= 4MB: Use BatchUpdateBlobs for efficiency
@@ -24,9 +24,9 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, trace};
 #[allow(unused_imports)]
 use tracing::warn;
+use tracing::{debug, error, info, trace};
 
 use crate::cas::{CasBackend, CasError, CasResult};
 use crate::types::DigestInfo;
@@ -113,7 +113,7 @@ pub struct OutputUploader {
 impl OutputUploader {
     pub fn new(cas_backend: Arc<dyn CasBackend>, config: UploaderConfig) -> Self {
         let upload_semaphore = Arc::new(Semaphore::new(config.max_concurrent_uploads));
-        
+
         Self {
             cas_backend,
             config,
@@ -190,13 +190,9 @@ impl OutputUploader {
     /// - SHA256 computation via streaming (O(1) memory)
     /// - Files > 4MB: ByteStream API with disk-to-network streaming
     /// - Files <= 4MB: BatchUpdateBlobs for efficiency
-    async fn upload_file(
-        &self,
-        execroot: &Path,
-        rel_path: &str,
-    ) -> CasResult<UploadedFile> {
+    async fn upload_file(&self, execroot: &Path, rel_path: &str) -> CasResult<UploadedFile> {
         let full_path = execroot.join(rel_path);
-        
+
         trace!("Uploading file: {} -> {}", rel_path, full_path.display());
 
         if !full_path.exists() {
@@ -220,8 +216,12 @@ impl OutputUploader {
         rel_path: &str,
     ) -> CasResult<UploadedDirectory> {
         let full_path = execroot.join(rel_path);
-        
-        trace!("Uploading directory: {} -> {}", rel_path, full_path.display());
+
+        trace!(
+            "Uploading directory: {} -> {}",
+            rel_path,
+            full_path.display()
+        );
 
         if !full_path.exists() {
             return Err(CasError::InvalidData(format!(
@@ -238,9 +238,9 @@ impl OutputUploader {
         }
 
         let (tree_data, file_count) = self.build_tree(&full_path).await?;
-        
+
         let tree_digest = DigestInfo::from_bytes(&tree_data);
-        
+
         if !self.cas_backend.contains(&tree_digest).await? {
             self.cas_backend
                 .write(&tree_digest, Bytes::from(tree_data))
@@ -264,32 +264,35 @@ impl OutputUploader {
     /// Build a Tree protobuf from a directory with Zero-Allocation streaming
     ///
     /// Returns (serialized_tree_data, file_count)
-    /// 
+    ///
     /// CRITICAL: REAPI expects a Tree message (root + children), not a raw Directory.
     /// The tree_digest field in OutputDirectory must be the hash of a serialized Tree.
-    /// 
+    ///
     /// Tree structure per REAPI v2:
     /// - root: Directory (root directory contents with only file nodes and dir names/digests)
     /// - children: repeated Directory (all child directories, flattened, digest-addressed)
     fn build_tree<'a>(
         &'a self,
         dir_path: &'a Path,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CasResult<(Vec<u8>, usize)>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CasResult<(Vec<u8>, usize)>> + Send + 'a>>
+    {
         Box::pin(async move {
-            use crate::proto::build::bazel::remote::execution::v2::{Directory, Tree};
             #[allow(unused_imports)]
             use crate::proto::build::bazel::remote::execution::v2::DirectoryNode;
             #[allow(unused_imports)]
             use crate::proto::build::bazel::remote::execution::v2::FileNode;
-            
+            use crate::proto::build::bazel::remote::execution::v2::{Directory, Tree};
+
             let mut child_dirs: Vec<Directory> = Vec::new();
-            let (root_dir, file_count) = self.build_directory_recursive(dir_path, &mut child_dirs).await?;
-            
+            let (root_dir, file_count) = self
+                .build_directory_recursive(dir_path, &mut child_dirs)
+                .await?;
+
             let tree = Tree {
                 root: Some(root_dir),
                 children: child_dirs,
             };
-            
+
             let mut buf = Vec::new();
             prost::Message::encode(&tree, &mut buf)
                 .map_err(|e| CasError::InvalidData(format!("Failed to encode Tree: {}", e)))?;
@@ -297,7 +300,7 @@ impl OutputUploader {
             Ok((buf, file_count))
         })
     }
-    
+
     /// Helper to recursively build a Directory and collect all child directories.
     /// Returns the Directory for this level and the total file count in the subtree.
     /// NOTE: This uses boxed futures to allow async recursion.
@@ -305,114 +308,129 @@ impl OutputUploader {
         &'a self,
         dir_path: &'a Path,
         child_dirs: &'a mut Vec<crate::proto::build::bazel::remote::execution::v2::Directory>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CasResult<(crate::proto::build::bazel::remote::execution::v2::Directory, usize)>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = CasResult<(
+                        crate::proto::build::bazel::remote::execution::v2::Directory,
+                        usize,
+                    )>,
+                > + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
-        use crate::proto::build::bazel::remote::execution::v2::{Directory, FileNode, DirectoryNode};
-        
-        let mut dir = Directory::default();
-        let mut file_count = 0;
-        
-        let mut entries = fs::read_dir(dir_path).await.map_err(CasError::Io)?;
+            use crate::proto::build::bazel::remote::execution::v2::{
+                Directory, DirectoryNode, FileNode,
+            };
 
-        while let Some(entry) = entries.next_entry().await.map_err(CasError::Io)? {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
+            let mut dir = Directory::default();
+            let mut file_count = 0;
 
-            if path.is_file() {
-                let metadata = fs::metadata(&path).await.map_err(CasError::Io)?;
-                let size = metadata.len() as i64;
-                
-                #[cfg(unix)]
-                let is_executable = {
-                    use std::os::unix::fs::PermissionsExt;
-                    metadata.permissions().mode() & 0o111 != 0
-                };
-                #[cfg(not(unix))]
-                let is_executable = false;
+            let mut entries = fs::read_dir(dir_path).await.map_err(CasError::Io)?;
 
-                let mut file = tokio::fs::File::open(&path).await.map_err(CasError::Io)?;
-                let mut hasher = Sha256::new();
-                let mut buffer = vec![0u8; self.config.read_chunk_size];
-                
-                loop {
-                    let n = file.read(&mut buffer).await.map_err(CasError::Io)?;
-                    if n == 0 { break; }
-                    hasher.update(&buffer[..n]);
-                }
-                
-                let hash = hex::encode(hasher.finalize());
-                let digest = DigestInfo::new(&hash, size);
-                
-                if !self.cas_backend.contains(&digest).await? {
-                    let max_batch = max_batch_size();
-                    if size > max_batch {
-                        trace!("Tree build: Using ByteStream for large file: {} bytes", size);
-                        let file = tokio::fs::File::open(&path).await.map_err(CasError::Io)?;
-                        let stream = ReaderStream::with_capacity(file, self.config.read_chunk_size)
-                            .map(|res| res.map(Bytes::from).map_err(CasError::Io));
+            while let Some(entry) = entries.next_entry().await.map_err(CasError::Io)? {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                if path.is_file() {
+                    let metadata = fs::metadata(&path).await.map_err(CasError::Io)?;
+                    let size = metadata.len() as i64;
+
+                    #[cfg(unix)]
+                    let is_executable = {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode() & 0o111 != 0
+                    };
+                    #[cfg(not(unix))]
+                    let is_executable = false;
+
+                    let mut file = tokio::fs::File::open(&path).await.map_err(CasError::Io)?;
+                    let mut hasher = Sha256::new();
+                    let mut buffer = vec![0u8; self.config.read_chunk_size];
+
+                    loop {
+                        let n = file.read(&mut buffer).await.map_err(CasError::Io)?;
+                        if n == 0 {
+                            break;
+                        }
+                        hasher.update(&buffer[..n]);
+                    }
+
+                    let hash = hex::encode(hasher.finalize());
+                    let digest = DigestInfo::new(&hash, size);
+
+                    if !self.cas_backend.contains(&digest).await? {
+                        let max_batch = max_batch_size();
+                        if size > max_batch {
+                            trace!(
+                                "Tree build: Using ByteStream for large file: {} bytes",
+                                size
+                            );
+                            let file = tokio::fs::File::open(&path).await.map_err(CasError::Io)?;
+                            let stream =
+                                ReaderStream::with_capacity(file, self.config.read_chunk_size)
+                                    .map(|res| res.map(Bytes::from).map_err(CasError::Io));
+                            self.cas_backend
+                                .write_stream(&digest, Box::pin(stream))
+                                .await?;
+                        } else {
+                            let data = fs::read(&path).await.map_err(CasError::Io)?;
+                            self.cas_backend.write(&digest, Bytes::from(data)).await?;
+                        }
+                    }
+
+                    dir.files.push(FileNode {
+                        name,
+                        digest: Some(crate::proto::build::bazel::remote::execution::v2::Digest {
+                            hash: digest.hash_to_string(),
+                            size_bytes: digest.size,
+                        }),
+                        is_executable,
+                        node_properties: None,
+                    });
+
+                    file_count += 1;
+                } else if path.is_dir() {
+                    let (subdir_dir, subdir_count) =
+                        self.build_directory_recursive(&path, child_dirs).await?;
+
+                    let mut subdir_buf = Vec::new();
+                    prost::Message::encode(&subdir_dir, &mut subdir_buf).map_err(|e| {
+                        CasError::InvalidData(format!("Failed to encode subdirectory: {}", e))
+                    })?;
+                    let subdir_digest = DigestInfo::from_bytes(&subdir_buf);
+
+                    if !self.cas_backend.contains(&subdir_digest).await? {
                         self.cas_backend
-                            .write_stream(&digest, Box::pin(stream))
-                            .await?;
-                    } else {
-                        let data = fs::read(&path).await.map_err(CasError::Io)?;
-                        self.cas_backend
-                            .write(&digest, Bytes::from(data))
+                            .write(&subdir_digest, Bytes::from(subdir_buf))
                             .await?;
                     }
+
+                    child_dirs.push(subdir_dir);
+
+                    dir.directories.push(DirectoryNode {
+                        name,
+                        digest: Some(crate::proto::build::bazel::remote::execution::v2::Digest {
+                            hash: subdir_digest.hash_to_string(),
+                            size_bytes: subdir_digest.size,
+                        }),
+                    });
+
+                    file_count += subdir_count;
                 }
-
-                dir.files.push(FileNode {
-                    name,
-                    digest: Some(crate::proto::build::bazel::remote::execution::v2::Digest {
-                        hash: digest.hash_to_string(),
-                        size_bytes: digest.size,
-                    }),
-                    is_executable,
-                    node_properties: None,
-                });
-                
-                file_count += 1;
-            } else if path.is_dir() {
-                let (subdir_dir, subdir_count) = self.build_directory_recursive(&path, child_dirs).await?;
-                
-                let mut subdir_buf = Vec::new();
-                prost::Message::encode(&subdir_dir, &mut subdir_buf)
-                    .map_err(|e| CasError::InvalidData(format!("Failed to encode subdirectory: {}", e)))?;
-                let subdir_digest = DigestInfo::from_bytes(&subdir_buf);
-                
-                if !self.cas_backend.contains(&subdir_digest).await? {
-                    self.cas_backend
-                        .write(&subdir_digest, Bytes::from(subdir_buf))
-                        .await?;
-                }
-
-                child_dirs.push(subdir_dir);
-
-                dir.directories.push(DirectoryNode {
-                    name,
-                    digest: Some(crate::proto::build::bazel::remote::execution::v2::Digest {
-                        hash: subdir_digest.hash_to_string(),
-                        size_bytes: subdir_digest.size,
-                    }),
-                });
-                
-                file_count += subdir_count;
             }
-        }
 
-        Ok((dir, file_count))
+            Ok((dir, file_count))
         })
     }
 
     /// Scan the execroot and find all files (for when output_paths is empty)
     ///
     /// This is a fallback that uploads everything found in the execroot
-    pub async fn scan_and_upload_all(
-        &self,
-        execroot: &Path,
-    ) -> UploadResult {
+    pub async fn scan_and_upload_all(&self, execroot: &Path) -> UploadResult {
         info!("Scanning execroot for outputs: {}", execroot.display());
-        
+
         let mut result = UploadResult::default();
 
         match self.scan_directory(execroot, execroot).await {
@@ -445,15 +463,16 @@ impl OutputUploader {
     ) -> CasResult<Vec<(String, PathBuf)>> {
         let mut files: Vec<(String, PathBuf)> = Vec::new();
         let mut dirs_to_process: Vec<PathBuf> = vec![current.to_path_buf()];
-        
+
         while let Some(dir) = dirs_to_process.pop() {
             let mut entries = fs::read_dir(&dir).await.map_err(CasError::Io)?;
-            
+
             while let Some(entry) = entries.next_entry().await.map_err(CasError::Io)? {
                 let path = entry.path();
-                
+
                 if path.is_file() {
-                    let rel_path = path.strip_prefix(execroot)
+                    let rel_path = path
+                        .strip_prefix(execroot)
                         .map_err(|e| CasError::InvalidData(format!("Path error: {}", e)))?
                         .to_string_lossy()
                         .to_string();
@@ -463,7 +482,7 @@ impl OutputUploader {
                 }
             }
         }
-        
+
         Ok(files)
     }
 
@@ -480,7 +499,7 @@ impl OutputUploader {
     ) -> CasResult<UploadedFile> {
         let metadata = fs::metadata(full_path).await.map_err(CasError::Io)?;
         let size = metadata.len() as i64;
-        
+
         #[cfg(unix)]
         let is_executable = {
             use std::os::unix::fs::PermissionsExt;
@@ -489,16 +508,20 @@ impl OutputUploader {
         #[cfg(not(unix))]
         let is_executable = false;
 
-        let mut file = tokio::fs::File::open(full_path).await.map_err(CasError::Io)?;
+        let mut file = tokio::fs::File::open(full_path)
+            .await
+            .map_err(CasError::Io)?;
         let mut hasher = Sha256::new();
         let mut buffer = vec![0u8; self.config.read_chunk_size];
-        
+
         loop {
             let n = file.read(&mut buffer).await.map_err(CasError::Io)?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             hasher.update(&buffer[..n]);
         }
-        
+
         let hash = hex::encode(hasher.finalize());
         let digest = DigestInfo::new(&hash, size);
 
@@ -524,25 +547,28 @@ impl OutputUploader {
         let max_batch = max_batch_size();
         if size > max_batch {
             trace!("Using ByteStream.Write for large file: {} bytes", size);
-            
-            let file = tokio::fs::File::open(full_path).await.map_err(CasError::Io)?;
-            
+
+            let file = tokio::fs::File::open(full_path)
+                .await
+                .map_err(CasError::Io)?;
+
             let stream = ReaderStream::with_capacity(file, self.config.read_chunk_size)
                 .map(|res| res.map(Bytes::from).map_err(CasError::Io));
-            
+
             self.cas_backend
                 .write_stream(&digest, Box::pin(stream))
                 .await?;
-                
-            info!("Streamed large file {} ({} bytes) via ByteStream", rel_path, size);
+
+            info!(
+                "Streamed large file {} ({} bytes) via ByteStream",
+                rel_path, size
+            );
         } else {
             trace!("Using BatchUpdate for small file: {} bytes", size);
-            
+
             let data = fs::read(full_path).await.map_err(CasError::Io)?;
-            self.cas_backend
-                .write(&digest, Bytes::from(data))
-                .await?;
-                
+            self.cas_backend.write(&digest, Bytes::from(data)).await?;
+
             info!("Uploaded small file {} ({} bytes)", rel_path, size);
         }
 

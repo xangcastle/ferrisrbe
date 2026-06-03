@@ -1,5 +1,3 @@
-
-
 use crate::execution::state_machine::OperationId;
 use crate::worker::k8s::ExecutionResult;
 use dashmap::DashMap;
@@ -42,7 +40,6 @@ impl ResultsStore {
 
     #[allow(dead_code)]
     pub fn cleanup_old(&self, _max_age_secs: u64) -> usize {
-
         0
     }
 }

@@ -1,5 +1,5 @@
 //! Resilient Worker Connection Architecture
-//! 
+//!
 //! Provides enterprise-grade connection management for RBE workers including:
 //! - Configurable keepalive via environment variables
 //! - Bidirectional health checking
@@ -24,7 +24,7 @@ pub use metrics::ConnectionMetrics;
 pub use reconnection::{ReconnectionPolicy, ReconnectionStrategy};
 
 /// Default configuration - production-ready sensible defaults
-/// 
+///
 /// These values are used when environment variables are not set.
 /// All values can be overridden via environment variables (see ConfigLoader).
 pub fn default_config() -> ConnectionConfig {

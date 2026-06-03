@@ -35,7 +35,7 @@ use crate::types::DigestInfo;
 pub const ENV_STREAMING_THRESHOLD: &str = "RBE_STREAMING_THRESHOLD";
 /// Environment variable name for download timeout
 pub const ENV_DOWNLOAD_TIMEOUT_SECS: &str = "RBE_DOWNLOAD_TIMEOUT_SECS";
-/// Environment variable name for max concurrent downloads  
+/// Environment variable name for max concurrent downloads
 pub const ENV_MAX_CONCURRENT_DOWNLOADS: &str = "RBE_MAX_CONCURRENT_DOWNLOADS";
 /// Environment variable name for download chunk size
 pub const ENV_DOWNLOAD_CHUNK_SIZE: &str = "RBE_DOWNLOAD_CHUNK_SIZE";
@@ -70,30 +70,30 @@ impl MaterializerConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(10);
-        
+
         let download_chunk_size = std::env::var(ENV_DOWNLOAD_CHUNK_SIZE)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(64 * 1024);
-        
+
         let download_timeout_secs = std::env::var(ENV_DOWNLOAD_TIMEOUT_SECS)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(300);
-        
+
         let streaming_threshold = std::env::var(ENV_STREAMING_THRESHOLD)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(4 * 1024 * 1024);
-        
+
         let use_hardlinks = std::env::var("RBE_USE_HARDLINKS")
             .map(|s| s != "false" && s != "0")
             .unwrap_or(true);
-        
+
         let validate_digests = std::env::var("RBE_VALIDATE_DIGESTS")
             .map(|s| s != "false" && s != "0")
             .unwrap_or(true);
-        
+
         Self {
             max_concurrent_downloads,
             use_hardlinks,
@@ -150,7 +150,7 @@ impl Materializer {
         config: MaterializerConfig,
     ) -> Self {
         let download_semaphore = Arc::new(Semaphore::new(config.max_concurrent_downloads));
-        
+
         Self {
             cas_backend,
             config,
@@ -169,19 +169,19 @@ impl Materializer {
         root_digest: &DigestInfo,
         execroot: &Path,
     ) -> CasResult<MaterializedRoot> {
-        info!("Materializing directory {} to {}", root_digest.hash_to_string(), execroot.display());
+        info!(
+            "Materializing directory {} to {}",
+            root_digest.hash_to_string(),
+            execroot.display()
+        );
 
         fs::create_dir_all(execroot).await.map_err(CasError::Io)?;
 
         let root_dir = self.fetch_directory(root_digest).await?;
 
         let mut stats = MaterializationStats::default();
-        self.materialize_directory_contents(
-            &root_dir,
-            root_digest,
-            execroot,
-            &mut stats,
-        ).await?;
+        self.materialize_directory_contents(&root_dir, root_digest, execroot, &mut stats)
+            .await?;
 
         info!(
             "Materialized {} files ({} cached) in {} directories, {} bytes downloaded",
@@ -200,8 +200,9 @@ impl Materializer {
     /// Fetch a Directory from CAS
     async fn fetch_directory(&self, digest: &DigestInfo) -> CasResult<Directory> {
         trace!("Fetching directory {}", digest.hash_to_string());
-        
-        let data = self.cas_backend
+
+        let data = self
+            .cas_backend
             .read(digest)
             .await?
             .ok_or_else(|| CasError::NotFound(digest.hash_to_string()))?;
@@ -216,9 +217,8 @@ impl Materializer {
             }
         }
 
-        let dir = Directory::decode(data).map_err(|e| {
-            CasError::InvalidData(format!("Failed to decode Directory: {}", e))
-        })?;
+        let dir = Directory::decode(data)
+            .map_err(|e| CasError::InvalidData(format!("Failed to decode Directory: {}", e)))?;
 
         Ok(dir)
     }
@@ -243,13 +243,9 @@ impl Materializer {
             let child_path = path.join(&dir_node.name);
             let child_digest = digest_info_from_proto(dir_node.digest.as_ref().unwrap())?;
             let child_dir = self.fetch_directory(&child_digest).await?;
-            
-            self.materialize_directory_contents(
-                &child_dir,
-                &child_digest,
-                &child_path,
-                stats,
-            ).await?;
+
+            self.materialize_directory_contents(&child_dir, &child_digest, &child_path, stats)
+                .await?;
         }
 
         Ok(())
@@ -276,13 +272,14 @@ impl Materializer {
             let child_path = path.join(&dir_node.name);
             let child_digest = digest_info_from_proto(dir_node.digest.as_ref().unwrap())?;
             let child_dir = self.fetch_directory(&child_digest).await?;
-            
+
             Box::pin(self.materialize_directory_contents(
                 &child_dir,
                 &child_digest,
                 &child_path,
                 stats,
-            )).await?;
+            ))
+            .await?;
         }
 
         Ok(())
@@ -297,8 +294,12 @@ impl Materializer {
     ) -> CasResult<()> {
         let file_path = parent_path.join(&file_node.name);
         let digest = digest_info_from_proto(file_node.digest.as_ref().unwrap())?;
-        
-        trace!("Materializing file {} ({})", file_path.display(), digest.hash_to_string());
+
+        trace!(
+            "Materializing file {} ({})",
+            file_path.display(),
+            digest.hash_to_string()
+        );
 
         if self.validate_existing_file(&file_path, &digest).await? {
             trace!("File {} already exists and is valid", file_path.display());
@@ -311,18 +312,37 @@ impl Materializer {
 
         let cas_path = self.cas_cache_path(&digest);
         if cas_path.exists() {
-            self.link_file(&cas_path, &file_path, file_node.is_executable).await?;
+            self.link_file(&cas_path, &file_path, file_node.is_executable)
+                .await?;
             stats.file_count += 1;
             stats.cached_files += 1;
             return Ok(());
         }
 
-        debug!("Downloading file {} from CAS (size: {} bytes)", digest.hash_to_string(), digest.size);
-        
+        debug!(
+            "Downloading file {} from CAS (size: {} bytes)",
+            digest.hash_to_string(),
+            digest.size
+        );
+
         if digest.size > self.config.streaming_threshold {
-            self.materialize_file_streaming(&digest, &cas_path, &file_path, file_node.is_executable, stats).await?;
+            self.materialize_file_streaming(
+                &digest,
+                &cas_path,
+                &file_path,
+                file_node.is_executable,
+                stats,
+            )
+            .await?;
         } else {
-            self.materialize_file_buffered(&digest, &cas_path, &file_path, file_node.is_executable, stats).await?;
+            self.materialize_file_buffered(
+                &digest,
+                &cas_path,
+                &file_path,
+                file_node.is_executable,
+                stats,
+            )
+            .await?;
         }
 
         Ok(())
@@ -337,7 +357,8 @@ impl Materializer {
         is_executable: bool,
         stats: &mut MaterializationStats,
     ) -> CasResult<()> {
-        let data = self.cas_backend
+        let data = self
+            .cas_backend
             .read(digest)
             .await?
             .ok_or_else(|| CasError::NotFound(digest.hash_to_string()))?;
@@ -352,7 +373,9 @@ impl Materializer {
             }
         }
 
-        fs::create_dir_all(cas_path.parent().unwrap()).await.map_err(CasError::Io)?;
+        fs::create_dir_all(cas_path.parent().unwrap())
+            .await
+            .map_err(CasError::Io)?;
         fs::write(cas_path, &data).await.map_err(CasError::Io)?;
 
         self.link_file(cas_path, file_path, is_executable).await?;
@@ -373,34 +396,45 @@ impl Materializer {
         is_executable: bool,
         stats: &mut MaterializationStats,
     ) -> CasResult<()> {
-        let stream = self.cas_backend
+        let stream = self
+            .cas_backend
             .read_stream(digest, 0, None)
             .await?
             .ok_or_else(|| CasError::NotFound(digest.hash_to_string()))?;
 
-        fs::create_dir_all(cas_path.parent().unwrap()).await.map_err(CasError::Io)?;
-        
+        fs::create_dir_all(cas_path.parent().unwrap())
+            .await
+            .map_err(CasError::Io)?;
+
         let temp_path = cas_path.with_extension(".tmp");
         let mut file = fs::File::create(&temp_path).await.map_err(CasError::Io)?;
-        
+
         let mut stream = stream;
         let mut total_bytes: u64 = 0;
         let mut hasher = Sha256::new();
         let start_time = std::time::Instant::now();
         let timeout_duration = self.config.download_timeout;
-        
-        info!("Starting streaming download for {} (timeout: {:?})", 
-              digest.hash_to_string(), timeout_duration);
-        
+
+        info!(
+            "Starting streaming download for {} (timeout: {:?})",
+            digest.hash_to_string(),
+            timeout_duration
+        );
+
         loop {
             if start_time.elapsed() > timeout_duration {
                 fs::remove_file(&temp_path).await.ok();
-                error!("Download timeout for {} after {:?}", digest.hash_to_string(), timeout_duration);
+                error!(
+                    "Download timeout for {} after {:?}",
+                    digest.hash_to_string(),
+                    timeout_duration
+                );
                 return Err(CasError::Storage(format!(
-                    "Download timeout after {:?}", timeout_duration
+                    "Download timeout after {:?}",
+                    timeout_duration
                 )));
             }
-            
+
             match timeout(Duration::from_secs(30), stream.next()).await {
                 Ok(Some(chunk_result)) => {
                     let chunk = chunk_result?;
@@ -411,20 +445,27 @@ impl Materializer {
                 Ok(None) => break,
                 Err(_) => {
                     fs::remove_file(&temp_path).await.ok();
-                    error!("Chunk read timeout for {} (no data for 30s)", digest.hash_to_string());
+                    error!(
+                        "Chunk read timeout for {} (no data for 30s)",
+                        digest.hash_to_string()
+                    );
                     return Err(CasError::Storage(
-                        "Chunk read timeout - connection may be stuck".to_string()
+                        "Chunk read timeout - connection may be stuck".to_string(),
                     ));
                 }
             }
         }
-        
+
         file.flush().await.map_err(CasError::Io)?;
         drop(file);
-        
-        info!("Downloaded {} ({} bytes) in {:?}", 
-              digest.hash_to_string(), total_bytes, start_time.elapsed());
-        
+
+        info!(
+            "Downloaded {} ({} bytes) in {:?}",
+            digest.hash_to_string(),
+            total_bytes,
+            start_time.elapsed()
+        );
+
         if self.config.validate_digests {
             let computed_hash = hex::encode(hasher.finalize());
             if computed_hash != digest.hash_to_string() {
@@ -435,16 +476,22 @@ impl Materializer {
                 ));
             }
         }
-        
-        fs::rename(&temp_path, cas_path).await.map_err(CasError::Io)?;
-        
+
+        fs::rename(&temp_path, cas_path)
+            .await
+            .map_err(CasError::Io)?;
+
         self.link_file(cas_path, file_path, is_executable).await?;
-        
+
         stats.file_count += 1;
         stats.bytes_downloaded += total_bytes;
-        
-        info!("Streamed large file {} ({} bytes) to CAS cache", digest.hash_to_string(), total_bytes);
-        
+
+        info!(
+            "Streamed large file {} ({} bytes) to CAS cache",
+            digest.hash_to_string(),
+            total_bytes
+        );
+
         Ok(())
     }
 
@@ -468,13 +515,17 @@ impl Materializer {
             let mut file = fs::File::open(path).await.map_err(CasError::Io)?;
             let mut hasher = Sha256::new();
             let mut buffer = vec![0u8; self.config.download_chunk_size];
-            
+
             loop {
-                let n = tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await.map_err(CasError::Io)?;
-                if n == 0 { break; }
+                let n = tokio::io::AsyncReadExt::read(&mut file, &mut buffer)
+                    .await
+                    .map_err(CasError::Io)?;
+                if n == 0 {
+                    break;
+                }
                 hasher.update(&buffer[..n]);
             }
-            
+
             let computed_hash = hex::encode(hasher.finalize());
             Ok(computed_hash == expected_digest.hash_to_string())
         } else {
@@ -484,12 +535,7 @@ impl Materializer {
 
     /// Create a link (hardlink or copy) from source to destination
     /// Automatically detects cross-device link failures and falls back to copy silently.
-    async fn link_file(
-        &self,
-        source: &Path,
-        dest: &Path,
-        is_executable: bool,
-    ) -> CasResult<()> {
+    async fn link_file(&self, source: &Path, dest: &Path, is_executable: bool) -> CasResult<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).await.map_err(CasError::Io)?;
         }
@@ -498,16 +544,16 @@ impl Materializer {
             fs::remove_file(dest).await.map_err(CasError::Io)?;
         }
 
-        let use_hardlinks = self.config.use_hardlinks 
-            && !self.hardlink_failed_exdev.load(Ordering::Relaxed);
+        let use_hardlinks =
+            self.config.use_hardlinks && !self.hardlink_failed_exdev.load(Ordering::Relaxed);
 
         if use_hardlinks {
             match fs::hard_link(source, dest).await {
                 Ok(()) => {}
                 Err(e) => {
-                    let is_exdev = e.kind() == ErrorKind::InvalidInput || 
-                                   e.raw_os_error() == Some(18);
-                    
+                    let is_exdev =
+                        e.kind() == ErrorKind::InvalidInput || e.raw_os_error() == Some(18);
+
                     if is_exdev {
                         if !self.hardlink_failed_exdev.swap(true, Ordering::Relaxed) {
                             info!("Cross-device link detected, switching to copy mode for remaining files (CAS and execroot on different filesystems)");
@@ -515,7 +561,7 @@ impl Materializer {
                     } else {
                         warn!("Hardlink failed ({}), falling back to copy", e);
                     }
-                    
+
                     fs::copy(source, dest).await.map_err(CasError::Io)?;
                 }
             }
@@ -527,9 +573,14 @@ impl Materializer {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(dest).await.map_err(CasError::Io)?.permissions();
+                let mut perms = fs::metadata(dest)
+                    .await
+                    .map_err(CasError::Io)?
+                    .permissions();
                 perms.set_mode(perms.mode() | 0o111);
-                fs::set_permissions(dest, perms).await.map_err(CasError::Io)?;
+                fs::set_permissions(dest, perms)
+                    .await
+                    .map_err(CasError::Io)?;
             }
         }
 
@@ -550,7 +601,7 @@ impl Materializer {
     /// Clean up the execroot after execution
     pub async fn cleanup_execroot(&self, execroot: &Path) -> CasResult<()> {
         info!("Cleaning up execroot {}", execroot.display());
-        
+
         if execroot.exists() {
             fs::remove_dir_all(execroot).await.map_err(CasError::Io)?;
         }
@@ -570,14 +621,19 @@ struct MaterializationStats {
 
 /// Helper function to convert protobuf Digest to DigestInfo
 fn digest_info_from_proto(
-    digest: &crate::proto::build::bazel::remote::execution::v2::Digest
+    digest: &crate::proto::build::bazel::remote::execution::v2::Digest,
 ) -> CasResult<DigestInfo> {
     if digest.hash.is_empty() {
-        return Err(CasError::InvalidData(
-            format!("Digest hash is empty (size={})", digest.size_bytes)
-        ));
+        return Err(CasError::InvalidData(format!(
+            "Digest hash is empty (size={})",
+            digest.size_bytes
+        )));
     }
-    trace!("Converting proto Digest to DigestInfo: hash={}, size={}", digest.hash, digest.size_bytes);
+    trace!(
+        "Converting proto Digest to DigestInfo: hash={}, size={}",
+        digest.hash,
+        digest.size_bytes
+    );
     Ok(DigestInfo::new(&digest.hash, digest.size_bytes))
 }
 
@@ -618,22 +674,22 @@ mod tests {
 
         let digest = DigestInfo::new("aabbccdd1122", 100);
         let path = materializer.cas_cache_path(&digest);
-        
+
         assert!(path.to_string_lossy().contains("aa/bb/aabbccdd1122"));
     }
 
     struct MockCasBackend;
-    
+
     #[async_trait::async_trait]
     impl CasBackend for MockCasBackend {
         async fn contains(&self, _digest: &DigestInfo) -> CasResult<bool> {
             Ok(false)
         }
-        
+
         async fn read(&self, _digest: &DigestInfo) -> CasResult<Option<Bytes>> {
             Ok(None)
         }
-        
+
         async fn read_stream(
             &self,
             _digest: &DigestInfo,
@@ -642,11 +698,11 @@ mod tests {
         ) -> CasResult<Option<futures::stream::BoxStream<'static, CasResult<Bytes>>>> {
             Ok(None)
         }
-        
+
         async fn write(&self, _digest: &DigestInfo, _data: Bytes) -> CasResult<()> {
             Ok(())
         }
-        
+
         async fn write_stream(
             &self,
             _digest: &DigestInfo,
@@ -654,11 +710,11 @@ mod tests {
         ) -> CasResult<()> {
             Ok(())
         }
-        
+
         async fn delete(&self, _digest: &DigestInfo) -> CasResult<()> {
             Ok(())
         }
-        
+
         async fn local_path(&self, _digest: &DigestInfo) -> CasResult<Option<PathBuf>> {
             Ok(None)
         }

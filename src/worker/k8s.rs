@@ -1,5 +1,3 @@
-
-
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
@@ -8,7 +6,6 @@ use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct K8sWorkerConfig {
-
     pub server_endpoint: String,
 
     pub worker_type: String,
@@ -115,7 +112,6 @@ pub struct AssignmentSender {
 }
 
 impl K8sWorker {
-
     pub fn new(
         config: K8sWorkerConfig,
     ) -> (
@@ -209,7 +205,6 @@ impl K8sWorker {
         let start = Instant::now();
 
         let output = if assignment.command.is_empty() {
-
             Command::new("echo")
                 .arg(format!("Executed: {}", assignment.execution_id))
                 .stdout(Stdio::piped())
@@ -399,7 +394,6 @@ pub struct WorkerRequirements {
 
 impl WorkerRequirements {
     pub fn matches(&self, info: &WorkerInfo) -> bool {
-
         if let Some(ref req_type) = self.worker_type {
             if &info.worker_type != req_type {
                 return false;
@@ -425,9 +419,7 @@ pub struct WorkerStats {
 }
 
 impl WorkerStats {
-
     pub fn queue_depth(&self) -> usize {
-
         self.busy.saturating_sub(self.idle)
     }
 }

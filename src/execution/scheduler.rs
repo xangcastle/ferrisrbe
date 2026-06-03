@@ -1,5 +1,3 @@
-
-
 use crate::execution::state_machine::{ExecutionStage, ExecutionStateMachine, OperationId};
 use crate::types::{AtomicInstant, DigestInfo, Result};
 use dashmap::DashMap;
@@ -29,17 +27,13 @@ pub enum QueuePriority {
 impl QueuePriority {
     #[allow(dead_code)]
     pub fn from_action(action: &ExecutableAction) -> Self {
-
         let total_size: i64 = action.input_digests.iter().map(|d| d.size).sum();
 
         if total_size < 1024 * 1024 {
-
             QueuePriority::Fast
         } else if total_size < 100 * 1024 * 1024 {
-
             QueuePriority::Medium
         } else {
-
             QueuePriority::Slow
         }
     }
@@ -68,7 +62,6 @@ struct QueueItem {
 }
 
 pub struct MultiLevelScheduler {
-
     fast_queue: Mutex<VecDeque<QueueItem>>,
 
     medium_queue: Mutex<VecDeque<QueueItem>>,
@@ -124,10 +117,13 @@ impl MultiLevelScheduler {
             return Ok(existing_entry.operation_id);
         }
 
-        self.in_flight_actions.insert(digest, InFlightEntry {
-            operation_id: action.operation_id,
-            inserted_at: Instant::now(),
-        });
+        self.in_flight_actions.insert(
+            digest,
+            InFlightEntry {
+                operation_id: action.operation_id,
+                inserted_at: Instant::now(),
+            },
+        );
 
         let priority = action.priority;
         let operation_id = action.operation_id;
@@ -165,7 +161,6 @@ impl MultiLevelScheduler {
     }
 
     pub fn dequeue(&self) -> Option<(ExecutableAction, Arc<ExecutionStateMachine>)> {
-
         if fastrand::u8(0..100) < 70 {
             if let Some(item) = self.try_dequeue_fast() {
                 return Some((item.action, item.state_machine));
@@ -236,21 +231,21 @@ impl MultiLevelScheduler {
     pub fn cleanup_stale_actions(&self, max_age: Duration) -> usize {
         let now = Instant::now();
         let mut removed = 0;
-        
+
         let stale_keys: Vec<DigestInfo> = self
             .in_flight_actions
             .iter()
             .filter(|entry| now.duration_since(entry.value().inserted_at) > max_age)
             .map(|entry| *entry.key())
             .collect();
-        
+
         for key in stale_keys {
             if self.in_flight_actions.remove(&key).is_some() {
                 removed += 1;
                 warn!("Removed stale in-flight action: {:?}", key);
             }
         }
-        
+
         removed
     }
 

@@ -1,5 +1,3 @@
-
-
 pub mod action_cache_service;
 pub mod byte_stream;
 pub mod capabilities_service;
@@ -9,13 +7,13 @@ pub mod worker_service;
 
 use std::net::SocketAddr;
 use std::time::Duration;
-use tonic::transport::Server;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tracing::info;
 
 use crate::cache::action_cache::L1ActionCache;
-use crate::cas::backends::GrpcCasBackend;
 #[allow(unused_imports)]
 use crate::cas::backends::DiskBackend;
+use crate::cas::backends::GrpcCasBackend;
 use crate::cas::SharedCasBackend;
 use crate::execution::engine::ExecutionEngine;
 use crate::execution::results::ResultsStore;
@@ -62,13 +60,11 @@ pub struct RbeServer {
 
 impl RbeServer {
     pub async fn new(config: RbeServerConfig) -> Result<Self, Box<dyn std::error::Error>> {
-        let cas_endpoint = std::env::var("CAS_ENDPOINT")
-            .unwrap_or_else(|_| "bazel-remote:9094".to_string());
-        
+        let cas_endpoint =
+            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "bazel-remote:9094".to_string());
+
         info!("Initializing gRPC CAS backend: endpoint={}", cas_endpoint);
-        let cas_backend: SharedCasBackend = Arc::new(
-            GrpcCasBackend::new(&cas_endpoint).await?
-        );
+        let cas_backend: SharedCasBackend = Arc::new(GrpcCasBackend::new(&cas_endpoint).await?);
         info!("CAS backend initialized successfully");
 
         let l1_cache = Arc::new(L1ActionCache::new(
@@ -160,18 +156,38 @@ impl RbeServer {
             .ok()
             .map(|s| s == "true" || s == "1")
             .unwrap_or(true);
-        
+
         info!("HTTP/2 Configuration: tcp_keepalive={}s, http2_interval={}s, http2_timeout={}s, request_timeout={}s, adaptive_window={}",
-              tcp_keepalive_secs, http2_keepalive_interval_secs, http2_keepalive_timeout_secs, 
+              tcp_keepalive_secs, http2_keepalive_interval_secs, http2_keepalive_timeout_secs,
               request_timeout_secs, http2_adaptive_window);
-        
-        Server::builder()
+
+        // Configure TLS if certificates are provided
+        let tls_cert = std::env::var("RBE_TLS_CERT").ok();
+        let tls_key = std::env::var("RBE_TLS_KEY").ok();
+
+        // Build base server configuration
+        let mut server_builder = Server::builder()
             .tcp_keepalive(Some(Duration::from_secs(tcp_keepalive_secs)))
             .tcp_nodelay(true)
             .http2_keepalive_interval(Some(Duration::from_secs(http2_keepalive_interval_secs)))
             .http2_keepalive_timeout(Some(Duration::from_secs(http2_keepalive_timeout_secs)))
             .http2_adaptive_window(Some(http2_adaptive_window))
-            .timeout(Duration::from_secs(request_timeout_secs))
+            .timeout(Duration::from_secs(request_timeout_secs));
+
+        // Apply TLS if certificates are configured
+        if let (Some(cert_pem), Some(key_pem)) = (&tls_cert, &tls_key) {
+            info!("Configuring TLS with provided certificates");
+            let identity = Identity::from_pem(cert_pem.as_bytes(), key_pem.as_bytes());
+            let tls_config = ServerTlsConfig::new().identity(identity);
+            server_builder = server_builder
+                .tls_config(tls_config)
+                .map_err(|e| format!("Failed to configure TLS: {}", e))?;
+            info!("TLS enabled successfully");
+        } else {
+            info!("Running without TLS (plaintext mode)");
+        }
+
+        server_builder
             .add_service(byte_stream_service.into_service())
             .add_service(action_cache_service.into_service())
             .add_service(cas_service.into_service())

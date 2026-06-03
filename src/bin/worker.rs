@@ -9,9 +9,9 @@
 
 use rbe_server::cas::backends::GrpcCasBackend;
 use rbe_server::cas::CasBackend;
+use rbe_server::types::DigestInfo;
 use rbe_server::worker::materializer::{Materializer, MaterializerConfig};
 use rbe_server::worker::output_uploader::{OutputUploader, UploaderConfig};
-use rbe_server::types::DigestInfo;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -46,9 +46,11 @@ mod resilient_connection {
 
     #[allow(unused_imports)]
     pub use adaptive_keepalive::AdaptiveKeepalive;
-    pub use connection_manager::{ConfigLoader, ConnectionConfig, ConnectionManager, ConnectionEvent};
     #[allow(unused_imports)]
     pub use connection_manager::ConnectionStats;
+    pub use connection_manager::{
+        ConfigLoader, ConnectionConfig, ConnectionEvent, ConnectionManager,
+    };
     pub use connection_state::ConnectionState;
     #[allow(unused_imports)]
     pub use health_checker::{HealthCheckConfig, HealthChecker};
@@ -57,7 +59,7 @@ mod resilient_connection {
     pub use reconnection::{ReconnectionPolicy, ReconnectionStrategy};
 
     /// Default configuration - sensible defaults for production
-    /// 
+    ///
     /// All values can be overridden via RBE_* environment variables.
     /// This follows 12-Factor App principles.
     #[allow(dead_code)]
@@ -86,7 +88,7 @@ use resilient_connection::{
     ConfigLoader, ConnectionConfig, ConnectionEvent, ConnectionManager, ConnectionState,
 };
 #[allow(unused_imports)]
-use resilient_connection::{ReconnectionStrategy, ReconnectionPolicy};
+use resilient_connection::{ReconnectionPolicy, ReconnectionStrategy};
 
 struct ResilientWorkerConfig {
     worker_id: String,
@@ -146,27 +148,22 @@ struct ResilientRbeWorker {
 impl ResilientRbeWorker {
     async fn new(config: ResilientWorkerConfig) -> anyhow::Result<Self> {
         let connection_manager = Arc::new(ConnectionManager::new(config.connection_config.clone()));
-        
+
         let cas_cache_dir = std::path::PathBuf::from(&config.workdir).join("cas-cache");
         tokio::fs::create_dir_all(&cas_cache_dir).await?;
-        
-        let cas_endpoint = std::env::var("CAS_ENDPOINT")
-            .unwrap_or_else(|_| "bazel-remote:9094".to_string());
-        let cas_backend: Arc<dyn CasBackend> = Arc::new(
-            GrpcCasBackend::new(&cas_endpoint).await?,
-        );
-        
+
+        let cas_endpoint =
+            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "bazel-remote:9094".to_string());
+        let cas_backend: Arc<dyn CasBackend> = Arc::new(GrpcCasBackend::new(&cas_endpoint).await?);
+
         let materializer = Arc::new(Materializer::new(
             cas_backend.clone(),
             cas_cache_dir,
             MaterializerConfig::default(),
         ));
-        
-        let output_uploader = Arc::new(OutputUploader::new(
-            cas_backend,
-            UploaderConfig::default(),
-        ));
-        
+
+        let output_uploader = Arc::new(OutputUploader::new(cas_backend, UploaderConfig::default()));
+
         Ok(Self {
             config,
             connection_manager,
@@ -190,9 +187,9 @@ impl ResilientRbeWorker {
         info!("Worker ID: {}", self.config.worker_id);
         info!("Server: {}", self.config.server_endpoint);
         info!("CAS: {}", self.config.cas_endpoint);
-        
+
         let _event_monitor = self.start_event_monitor();
-        
+
         loop {
             match self.connect_and_work().await {
                 Ok(_) => {
@@ -210,7 +207,7 @@ impl ResilientRbeWorker {
 
             let delay = self.connection_manager.next_reconnect_delay().await;
             self.connection_manager.increment_reconnect_attempt().await;
-            
+
             info!("Reconnecting in {:?}...", delay);
             tokio::time::sleep(delay).await;
         }
@@ -221,7 +218,10 @@ impl ResilientRbeWorker {
             .state_machine()
             .write()
             .await
-            .transition_to(ConnectionState::Connecting, Some("Starting connection".to_string()));
+            .transition_to(
+                ConnectionState::Connecting,
+                Some("Starting connection".to_string()),
+            );
 
         let channel = match self.create_channel().await {
             Ok(ch) => ch,
@@ -230,18 +230,21 @@ impl ResilientRbeWorker {
                 return Err(e);
             }
         };
-        
+
         self.connection_manager
             .state_machine()
             .write()
             .await
-            .transition_to(ConnectionState::Handshaking, Some("Connected, starting handshake".to_string()));
+            .transition_to(
+                ConnectionState::Handshaking,
+                Some("Connected, starting handshake".to_string()),
+            );
 
         let mut client = WorkerServiceClient::new(channel.clone());
-        
+
         let (tx, rx) = mpsc::channel(100);
         let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-        
+
         let response = client.stream_work(outbound).await?;
         let mut inbound = response.into_inner();
 
@@ -288,7 +291,7 @@ impl ResilientRbeWorker {
                             // Log detailed error information for debugging
                             let error_msg = format!("gRPC error receiving message: {}", e);
                             error!("{}", error_msg);
-                            
+
                             // Check if it's the specific HTTP/2 error we're investigating
                             let e_str = e.to_string();
                             if e_str.contains("h2 protocol error") || e_str.contains("error reading a body") {
@@ -300,7 +303,7 @@ impl ResilientRbeWorker {
                                     self.config.connection_config.initial_keepalive_interval_secs,
                                     self.config.connection_config.keepalive_timeout_secs);
                             }
-                            
+
                             self.connection_manager
                                 .record_disconnected(format!("Receive error: {}", e))
                                 .await;
@@ -329,15 +332,18 @@ impl ResilientRbeWorker {
 
         heartbeat_handle.abort();
         metrics_handle.abort();
-        
+
         Ok(())
     }
 
     async fn create_channel(&self) -> anyhow::Result<Channel> {
         let config = &self.config.connection_config;
-        
-        info!("Creating gRPC channel to {}...", self.config.server_endpoint);
-        
+
+        info!(
+            "Creating gRPC channel to {}...",
+            self.config.server_endpoint
+        );
+
         let endpoint = tonic::transport::Endpoint::from_shared(self.config.server_endpoint.clone())
             .map_err(|e| {
                 error!("Failed to parse endpoint: {}", e);
@@ -368,14 +374,17 @@ impl ResilientRbeWorker {
         }
     }
 
-    fn start_adaptive_heartbeat(&self, tx: mpsc::Sender<WorkerMessage>) -> tokio::task::AbortHandle {
+    fn start_adaptive_heartbeat(
+        &self,
+        tx: mpsc::Sender<WorkerMessage>,
+    ) -> tokio::task::AbortHandle {
         let manager = self.connection_manager.clone();
         let worker_id = self.config.worker_id.clone();
-        
+
         tokio::spawn(async move {
             loop {
                 let interval_secs = manager.current_keepalive_interval().await.as_secs();
-                
+
                 tokio::time::sleep(Duration::from_secs(interval_secs)).await;
 
                 if !manager.is_operational().await {
@@ -395,12 +404,13 @@ impl ResilientRbeWorker {
                     break;
                 }
             }
-        }).abort_handle()
+        })
+        .abort_handle()
     }
 
     fn start_event_monitor(&self) -> tokio::task::AbortHandle {
         let event_rx = self.connection_manager.event_receiver();
-        
+
         tokio::spawn(async move {
             let mut rx = event_rx.write().await;
             while let Some(event) = rx.recv().await {
@@ -411,8 +421,15 @@ impl ResilientRbeWorker {
                     ConnectionEvent::Disconnected { reason } => {
                         warn!("⚠️  Connection lost: {}", reason);
                     }
-                    ConnectionEvent::Reconnecting { attempt, max_attempts, delay_ms } => {
-                        info!("🔄 Reconnecting ({}/{}) after {}ms", attempt, max_attempts, delay_ms);
+                    ConnectionEvent::Reconnecting {
+                        attempt,
+                        max_attempts,
+                        delay_ms,
+                    } => {
+                        info!(
+                            "🔄 Reconnecting ({}/{}) after {}ms",
+                            attempt, max_attempts, delay_ms
+                        );
                     }
                     ConnectionEvent::Failed { reason } => {
                         error!("❌ Connection failed: {}", reason);
@@ -434,17 +451,18 @@ impl ResilientRbeWorker {
                     }
                 }
             }
-        }).abort_handle()
+        })
+        .abort_handle()
     }
 
     fn start_metrics_reporter(&self) -> tokio::task::AbortHandle {
         let manager = self.connection_manager.clone();
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                
+
                 let stats = manager.stats().await;
                 info!(
                     "Connection stats: state={} (for {}s), keepalive={}s, reconnects={}",
@@ -454,7 +472,8 @@ impl ResilientRbeWorker {
                     stats.total_reconnections
                 );
             }
-        }).abort_handle()
+        })
+        .abort_handle()
     }
 
     async fn handle_server_message(
@@ -468,7 +487,7 @@ impl ResilientRbeWorker {
             }
             Some(server_message::Payload::Assignment(assignment)) => {
                 info!("Received assignment: {}", assignment.execution_id);
-                
+
                 if let Err(e) = assign_tx.send(assignment).await {
                     warn!("Failed to queue assignment: {}", e);
                 }
@@ -511,14 +530,16 @@ impl ResilientRbeWorker {
         }
 
         if let Some(input_root_digest) = assignment.input_root_digest {
-            let digest_info = DigestInfo::new(
-                &input_root_digest.hash,
-                input_root_digest.size_bytes
-            );
+            let digest_info =
+                DigestInfo::new(&input_root_digest.hash, input_root_digest.size_bytes);
 
             info!("Materializing input root: {}", digest_info.hash_to_string());
-            
-            match self.materializer.materialize_directory_recursive(&digest_info, &exec_dir).await {
+
+            match self
+                .materializer
+                .materialize_directory_recursive(&digest_info, &exec_dir)
+                .await
+            {
                 Ok(stats) => {
                     info!(
                         "Materialized {} files ({} cached) in {} directories",
@@ -534,7 +555,11 @@ impl ResilientRbeWorker {
                             worker_id: self.config.worker_id.clone(),
                             exit_code: -1,
                             stdout: vec![],
-                            stderr: format!("Failed to materialize input root: {} and create exec dir: {}", e, e2).into_bytes(),
+                            stderr: format!(
+                                "Failed to materialize input root: {} and create exec dir: {}",
+                                e, e2
+                            )
+                            .into_bytes(),
                             output_digests: vec![],
                             output_files: vec![],
                             output_directories: vec![],
@@ -546,7 +571,11 @@ impl ResilientRbeWorker {
             }
         }
 
-        info!("Creating output directories for {} files and {} directories", assignment.output_files.len(), assignment.output_directories.len());
+        info!(
+            "Creating output directories for {} files and {} directories",
+            assignment.output_files.len(),
+            assignment.output_directories.len()
+        );
         for output_file in &assignment.output_files {
             if let Some(parent) = Path::new(output_file).parent() {
                 let output_dir = exec_dir.join(parent);
@@ -573,11 +602,11 @@ impl ResilientRbeWorker {
             if assignment.command.len() > 1 {
                 cmd.args(&assignment.command[1..]);
             }
-            
+
             for env_var in &assignment.environment_variables {
                 cmd.env(&env_var.name, &env_var.value);
             }
-            
+
             cmd.current_dir(&exec_dir).output().await
         };
 
@@ -586,19 +615,29 @@ impl ResilientRbeWorker {
                 let exit_code = output.status.code().unwrap_or(-1);
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                info!("Command executed: exit_code={}, stdout_len={}, stderr_len={}", exit_code, stdout.len(), stderr.len());
+                info!(
+                    "Command executed: exit_code={}, stdout_len={}, stderr_len={}",
+                    exit_code,
+                    stdout.len(),
+                    stderr.len()
+                );
                 if !stdout.is_empty() {
                     info!("stdout: {}", stdout);
                 }
                 if !stderr.is_empty() {
                     info!("stderr: {}", stderr);
                 }
-                
+
                 let (output_files, output_directories) = if exit_code == 0 {
-                    let upload_result = self.output_uploader
-                        .upload_outputs(&exec_dir, &assignment.output_files, &assignment.output_directories)
+                    let upload_result = self
+                        .output_uploader
+                        .upload_outputs(
+                            &exec_dir,
+                            &assignment.output_files,
+                            &assignment.output_directories,
+                        )
                         .await;
-                    
+
                     let files: Vec<proto::ferris::rbe::worker::OutputFile> = upload_result
                         .files
                         .into_iter()
@@ -612,7 +651,7 @@ impl ResilientRbeWorker {
                             is_executable: f.is_executable,
                         })
                         .collect();
-                    
+
                     let dirs: Vec<proto::ferris::rbe::worker::OutputDirectory> = upload_result
                         .directories
                         .into_iter()
@@ -624,18 +663,18 @@ impl ResilientRbeWorker {
                             }),
                         })
                         .collect();
-                    
+
                     (files, dirs)
                 } else {
                     (vec![], vec![])
                 };
-                
+
                 if std::env::var("RBE_KEEP_EXECROOT").is_err() {
                     if let Err(e) = self.materializer.cleanup_execroot(&exec_dir).await {
                         warn!("Failed to cleanup execroot: {}", e);
                     }
                 }
-                
+
                 ProtoExecutionResult {
                     execution_id,
                     worker_id: self.config.worker_id.clone(),
@@ -655,7 +694,7 @@ impl ResilientRbeWorker {
                         warn!("Failed to cleanup execroot: {}", cleanup_err);
                     }
                 }
-                
+
                 ProtoExecutionResult {
                     execution_id,
                     worker_id: self.config.worker_id.clone(),

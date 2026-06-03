@@ -1,6 +1,6 @@
 # FerrisRBE Helm Chart
 
-[FerrisRBE](https://github.com/juhd/ferrisrbe) is a high-performance Remote Build Execution (RBE) server for Bazel, implemented in Rust.
+[FerrisRBE](https://github.com/xangcastle/ferrisrbe) is a high-performance Remote Build Execution (RBE) server for Bazel, implemented in Rust.
 
 ## Prerequisites
 
@@ -148,4 +148,4 @@ kubectl delete namespace rbe
 
 ## License
 
-[MIT](https://github.com/juhd/ferrisrbe/blob/main/LICENSE)
+[MIT](https://github.com/xangcastle/ferrisrbe/blob/main/LICENSE)

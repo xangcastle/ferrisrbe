@@ -1,5 +1,3 @@
-
-
 use crate::types::{AtomicInstant, DigestInfo, RbeError, Result};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,7 +48,6 @@ pub enum ExecutionStage {
 }
 
 impl ExecutionStage {
-
     pub fn as_str(&self) -> &'static str {
         match self {
             ExecutionStage::Unknown => "Unknown",
@@ -102,20 +99,20 @@ impl ExecutionStage {
     }
 
     /// Maps FerrisRBE internal state to standard REAPI v2 state.
-    /// 
+    ///
     /// REAPI v2 defines the following states:
     /// - UNKNOWN = 0
     /// - CACHE_CHECK = 1
     /// - QUEUED = 2
     /// - EXECUTING = 3
     /// - COMPLETED = 4
-    /// 
+    ///
     /// FerrisRBE has more granular states for internal tracking,
     /// but uses the standard mapping to report to Bazel.
     #[allow(dead_code)]
     pub fn to_reapi_stage(&self) -> i32 {
         use ExecutionStage::*;
-        
+
         match self {
             Unknown => 0,
             CacheCheck => 1,
@@ -133,7 +130,7 @@ impl ExecutionStage {
     #[allow(dead_code)]
     pub fn to_reapi_stage_name(&self) -> &'static str {
         use ExecutionStage::*;
-        
+
         match self {
             Unknown => "UNKNOWN",
             CacheCheck => "CACHE_CHECK",
@@ -155,7 +152,6 @@ impl fmt::Display for ExecutionStage {
 }
 
 pub struct ExecutionStateMachine {
-
     pub operation_id: OperationId,
 
     pub action_digest: DigestInfo,
@@ -252,7 +248,6 @@ impl fmt::Debug for ExecutionStateMachine {
 }
 
 pub struct StateMachineManager {
-
     machines: Arc<dashmap::DashMap<OperationId, Arc<ExecutionStateMachine>>>,
 }
 
@@ -337,11 +332,23 @@ mod tests {
         assert!(Downloading.can_transition_to(Executing));
         assert!(Executing.can_transition_to(Uploading));
         assert!(Uploading.can_transition_to(Completed));
-        
-        assert!(Assigned.can_transition_to(Completed), "Assigned -> Completed should be allowed");
-        assert!(Assigned.can_transition_to(Failed), "Assigned -> Failed should be allowed");
-        assert!(Downloading.can_transition_to(Completed), "Downloading -> Completed should be allowed");
-        assert!(Executing.can_transition_to(Completed), "Executing -> Completed should be allowed");
+
+        assert!(
+            Assigned.can_transition_to(Completed),
+            "Assigned -> Completed should be allowed"
+        );
+        assert!(
+            Assigned.can_transition_to(Failed),
+            "Assigned -> Failed should be allowed"
+        );
+        assert!(
+            Downloading.can_transition_to(Completed),
+            "Downloading -> Completed should be allowed"
+        );
+        assert!(
+            Executing.can_transition_to(Completed),
+            "Executing -> Completed should be allowed"
+        );
     }
 
     #[test]
@@ -351,29 +358,29 @@ mod tests {
         assert!(!CacheCheck.can_transition_to(Uploading));
         assert!(!CacheCheck.can_transition_to(Executing));
         assert!(!Queued.can_transition_to(Uploading));
-        
+
         assert!(!Completed.can_transition_to(Failed));
         assert!(!Completed.can_transition_to(Queued));
         assert!(!Failed.can_transition_to(Queued));
         assert!(!Failed.can_transition_to(Completed));
     }
-    
+
     #[test]
     fn test_reapi_stage_mapping() {
         use ExecutionStage::*;
-        
+
         assert_eq!(Unknown.to_reapi_stage(), 0);
         assert_eq!(CacheCheck.to_reapi_stage(), 1);
         assert_eq!(Queued.to_reapi_stage(), 2);
-        
+
         assert_eq!(Assigned.to_reapi_stage(), 3);
         assert_eq!(Downloading.to_reapi_stage(), 3);
         assert_eq!(Executing.to_reapi_stage(), 3);
         assert_eq!(Uploading.to_reapi_stage(), 3);
-        
+
         assert_eq!(Completed.to_reapi_stage(), 4);
         assert_eq!(Failed.to_reapi_stage(), 4);
-        
+
         assert_eq!(Assigned.to_reapi_stage_name(), "EXECUTING");
         assert_eq!(Executing.to_reapi_stage_name(), "EXECUTING");
         assert_eq!(Completed.to_reapi_stage_name(), "COMPLETED");

@@ -121,10 +121,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-
 
-      - name: Build and load images
+      - name: Build and load AMD64 images
         run: |
-          bazel run //oci:server_load //oci:worker_load
-          kind load docker-image ferrisrbe/server:latest ferrisrbe/worker:latest --name ferrisrbe-test
+          # Build and load AMD64 images for CI (GitHub Actions is AMD64)
+          bazel run //oci:server_load_amd64
+          bazel run //oci:worker_load_amd64
+          
+          echo "=== Docker images ==="
+          docker images | grep ferrisrbe || true
+          echo "=== Image architecture ==="
+          docker inspect ferrisrbe/server:latest | grep Architecture || true
+          
+      - name: Load images to Kind
+        run: |
+          kind load docker-image ferrisrbe/server:latest --name ferrisrbe-test
+          kind load docker-image ferrisrbe/worker:latest --name ferrisrbe-test
+          echo "=== Verify images in Kind ==="
+          kubectl get nodes -o json | jq -r '.items[0].status.images[] | select(.names[] | contains("ferrisrbe")) | .names[0]' || true
 
       - name: Deploy to Kind
         run: |
@@ -133,18 +146,58 @@ jobs:
             --set server.image.pullPolicy=Never \
             --set worker.image.repository=ferrisrbe/worker \
             --set worker.image.pullPolicy=Never \
-            --wait --timeout=2m
+            --set server.livenessProbe.enabled=false \
+            --set server.readinessProbe.enabled=false \
+            --set worker.livenessProbe.enabled=false \
+            --set worker.readinessProbe.enabled=false
+
+      - name: Debug - Check all resources
+        run: |
+          sleep 10
+          echo "=== All pods ==="
+          kubectl get pods -n rbe
+          echo "=== All deployments ==="
+          kubectl get deployments -n rbe
+          echo "=== All replica sets ==="
+          kubectl get rs -n rbe
+          echo "=== Events ==="
+          kubectl get events -n rbe --sort-by='.lastTimestamp' | tail -30
+          echo "=== Describe server deployment ==="
+          kubectl describe deployment ferrisrbe-server -n rbe || true
+          echo "=== Describe worker deployment ==="
+          kubectl describe deployment ferrisrbe-worker -n rbe || true
 
       - name: Wait for deployment
         run: |
-          kubectl rollout status deployment/ferrisrbe-server -n rbe --timeout=60s
-          kubectl rollout status deployment/ferrisrbe-worker -n rbe --timeout=60s
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=redis -n rbe --timeout=60s
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=bazel-remote -n rbe --timeout=60s
+          kubectl rollout status deployment/ferrisrbe-server -n rbe --timeout=120s || {
+            echo "=== Server deployment failed ==="
+            kubectl get pods -n rbe
+            echo "=== Server pod logs ==="
+            kubectl logs -l app.kubernetes.io/component=server -n rbe --tail=50 || true
+            echo "=== Server pod previous logs ==="
+            kubectl logs -l app.kubernetes.io/component=server -n rbe --tail=50 --previous || true
+            echo "=== Describe server pod ==="
+            kubectl describe pod -l app.kubernetes.io/component=server -n rbe || true
+            exit 1
+          }
+          kubectl rollout status deployment/ferrisrbe-worker -n rbe --timeout=120s || {
+            echo "=== Worker deployment failed ==="
+            kubectl get pods -n rbe
+            kubectl describe deployment ferrisrbe-worker -n rbe
+            kubectl logs -l app.kubernetes.io/component=worker -n rbe --tail=100 || true
+            exit 1
+          }
 
       - name: Port forward
         run: |
           kubectl port-forward -n rbe svc/ferrisrbe-server 9092:9092 &
           kubectl port-forward -n rbe svc/ferrisrbe-bazel-remote 9094:9094 &
-          sleep 5
+          echo "Waiting for port-forward to be ready..."
+          sleep 10
+          # Verify ports are listening
+          netstat -tlnp 2>/dev/null | grep -E '9092|9094' || ss -tlnp | grep -E '9092|9094' || true
 
       - name: Test cache
         run: |

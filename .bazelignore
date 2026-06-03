@@ -1,4 +1,6 @@
 ./bazel-*/
 ./examples/**/bazel-*/
+examples/
 .bazel/
 target/
+logs_*

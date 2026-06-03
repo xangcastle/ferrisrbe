@@ -1,5 +1,3 @@
-
-
 pub mod detector;
 pub mod handlers;
 pub mod registry;
@@ -22,7 +20,6 @@ pub struct VersionManager {
 }
 
 impl VersionManager {
-
     pub fn new() -> Self {
         Self {
             detector: CompositeDetector::new(),

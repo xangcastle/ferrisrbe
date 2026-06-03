@@ -1,5 +1,3 @@
-
-
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
@@ -15,8 +13,7 @@ use crate::proto::ferris::rbe::worker::{
 
 use crate::execution::engine::ExecutionEngine;
 use crate::worker::k8s::{
-    ExecutionResult, WorkAssignment, WorkerInfo, WorkerRegistry, WorkerState,
-    WorkerStatus,
+    ExecutionResult, WorkAssignment, WorkerInfo, WorkerRegistry, WorkerState, WorkerStatus,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -127,7 +124,7 @@ impl WorkerService for WorkerServiceImpl {
             let mut worker_id: Option<String> = None;
 
             info!("Starting worker message loop for new connection");
-            
+
             while let Ok(Some(msg)) = inbound.message().await {
                 match msg.payload {
                     Some(worker_message::Payload::Registration(reg)) => {
@@ -307,7 +304,7 @@ fn convert_assignment(internal: WorkAssignment) -> ProtoWorkAssignment {
             size_bytes: 0,
         })
     });
-    
+
     ProtoWorkAssignment {
         execution_id: internal.execution_id,
         action_digest: internal.action_digest.map(|h| Digest {
