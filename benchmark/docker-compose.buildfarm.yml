@@ -1,0 +1,72 @@
+# Bazel Buildfarm - Benchmark Configuration
+# Reference: https://github.com/bazelbuild/bazel-buildfarm
+version: "3.8"
+
+services:
+  # === BUILDFARM SERVER ===
+  buildfarm-server:
+    image: bazelbuild/buildfarm-server:latest
+    container_name: buildfarm-server
+    ports:
+      - "9092:9092"      # REAPI gRPC (standardized port for comparison)
+      - "9093:9093"      # JMX/Metrics
+    volumes:
+      - ./config/buildfarm-server.config:/app/buildfarm-server.config:ro
+    environment:
+      - JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=9093 -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.authenticate=false
+    command: ["/app/buildfarm-server", "/app/buildfarm-server.config"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildfarm-redis
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+
+  # === BUILDFARM WORKER ===
+  buildfarm-worker:
+    image: bazelbuild/buildfarm-worker:latest
+    container_name: buildfarm-worker
+    privileged: true
+    volumes:
+      - ./config/buildfarm-worker.config:/app/buildfarm-worker.config:ro
+      - worker-workspace:/tmp/worker
+    environment:
+      - JAVA_OPTS=-Xmx2g -Xms512m -XX:+UseG1GC
+    command: ["/app/buildfarm-worker", "/app/buildfarm-worker.config"]
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildfarm-server
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+        reservations:
+          memory: 512M
+
+  # === REDIS FOR BUILDFARM ===
+  buildfarm-redis:
+    image: redis:7-alpine
+    container_name: buildfarm-redis
+    ports:
+      - "6380:6379"      # Different port to avoid conflict
+    volumes:
+      - buildfarm-redis-data:/data
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  buildfarm-redis-data:
+  worker-workspace:
+
+networks:
+  benchmark-network:
+    driver: bridge

@@ -1,0 +1,134 @@
+{
+  "server": "localhost:9092",
+  "slow_actions": 5,
+  "fast_actions": 20,
+  "fast_timings": [
+    {
+      "action_id": "fast-17",
+      "queue_time_ms": 14.33873176574707,
+      "total_time_ms": 124.237060546875
+    },
+    {
+      "action_id": "fast-14",
+      "queue_time_ms": 17.732858657836914,
+      "total_time_ms": 179455.38878440857
+    },
+    {
+      "action_id": "fast-6",
+      "queue_time_ms": 20.009756088256836,
+      "total_time_ms": 179456.1891555786
+    },
+    {
+      "action_id": "fast-13",
+      "queue_time_ms": 16.30401611328125,
+      "total_time_ms": 179455.98196983337
+    },
+    {
+      "action_id": "fast-4",
+      "queue_time_ms": 17.93503761291504,
+      "total_time_ms": 179457.01909065247
+    },
+    {
+      "action_id": "fast-9",
+      "queue_time_ms": 17.176151275634766,
+      "total_time_ms": 179456.67815208435
+    },
+    {
+      "action_id": "fast-19",
+      "queue_time_ms": 17.364978790283203,
+      "total_time_ms": 179456.09211921692
+    },
+    {
+      "action_id": "fast-10",
+      "queue_time_ms": 19.481897354125977,
+      "total_time_ms": 179456.9399356842
+    },
+    {
+      "action_id": "fast-5",
+      "queue_time_ms": 16.130924224853516,
+      "total_time_ms": 179457.65590667725
+    },
+    {
+      "action_id": "fast-15",
+      "queue_time_ms": 16.5250301361084,
+      "total_time_ms": 179456.91108703613
+    },
+    {
+      "action_id": "fast-0",
+      "queue_time_ms": 17.302989959716797,
+      "total_time_ms": 179458.49609375
+    },
+    {
+      "action_id": "fast-12",
+      "queue_time_ms": 17.01807975769043,
+      "total_time_ms": 179457.55410194397
+    },
+    {
+      "action_id": "fast-11",
+      "queue_time_ms": 17.780065536499023,
+      "total_time_ms": 179457.91602134705
+    },
+    {
+      "action_id": "fast-2",
+      "queue_time_ms": 18.468141555786133,
+      "total_time_ms": 179458.86206626892
+    },
+    {
+      "action_id": "fast-18",
+      "queue_time_ms": 14.845848083496094,
+      "total_time_ms": 179457.89003372192
+    },
+    {
+      "action_id": "fast-7",
+      "queue_time_ms": 19.639968872070312,
+      "total_time_ms": 179458.8737487793
+    },
+    {
+      "action_id": "fast-16",
+      "queue_time_ms": 17.24076271057129,
+      "total_time_ms": 179458.55689048767
+    },
+    {
+      "action_id": "fast-1",
+      "queue_time_ms": 18.91303062438965,
+      "total_time_ms": 179459.84888076782
+    },
+    {
+      "action_id": "fast-8",
+      "queue_time_ms": 15.231847763061523,
+      "total_time_ms": 179459.38086509705
+    },
+    {
+      "action_id": "fast-3",
+      "queue_time_ms": 20.804166793823242,
+      "total_time_ms": 179460.16788482666
+    }
+  ],
+  "slow_timings": [
+    {
+      "action_id": "slow-4",
+      "queue_time_ms": 16.875028610229492,
+      "total_time_ms": 226.59611701965332
+    },
+    {
+      "action_id": "slow-2",
+      "queue_time_ms": 21.734952926635742,
+      "total_time_ms": 179455.28292655945
+    },
+    {
+      "action_id": "slow-1",
+      "queue_time_ms": 18.910884857177734,
+      "total_time_ms": 179456.91013336182
+    },
+    {
+      "action_id": "slow-3",
+      "queue_time_ms": 21.79408073425293,
+      "total_time_ms": 179459.37728881836
+    },
+    {
+      "action_id": "slow-0",
+      "queue_time_ms": 18.221139907836914,
+      "total_time_ms": 179460.15095710754
+    }
+  ]
+}
