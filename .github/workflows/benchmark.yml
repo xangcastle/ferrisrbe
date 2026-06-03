@@ -57,27 +57,40 @@ jobs:
       
       - name: Build OCI image with Bazel
         run: |
-          # Build AMD64 image (GitHub Actions runners are AMD64)
+          # Build AMD64 images (GitHub Actions runners are AMD64)
           bazel run //oci:server_load_amd64
+          bazel run //oci:worker_load_amd64
           
-          # Verify image was loaded
+          # Verify images were loaded
           docker images | grep ferrisrbe || true
           
           # Get image info
-          echo "=== Image Details ==="
+          echo "=== Server Image Details ==="
           docker inspect ferrisrbe/server:latest --format='{{.Size}}' | awk '{print "Size: " $1/1024/1024 " MB"}'
           docker inspect ferrisrbe/server:latest --format='{{.Id}}' | cut -d: -f2 | head -c 12 | xargs -I {} echo "Image ID: {}"
+          
+          echo "=== Worker Image Details ==="
+          docker inspect ferrisrbe/worker:latest --format='{{.Size}}' | awk '{print "Size: " $1/1024/1024 " MB"}'
+          docker inspect ferrisrbe/worker:latest --format='{{.Id}}' | cut -d: -f2 | head -c 12 | xargs -I {} echo "Image ID: {}"
       
-      - name: Save image as artifact
+      - name: Save images as artifacts
         run: |
           mkdir -p /tmp/docker-images
           docker save ferrisrbe/server:latest | gzip > /tmp/docker-images/ferrisrbe-server.tar.gz
+          docker save ferrisrbe/worker:latest | gzip > /tmp/docker-images/ferrisrbe-worker.tar.gz
       
-      - name: Upload image artifact
+      - name: Upload server image artifact
         uses: actions/upload-artifact@v4
         with:
           name: ferrisrbe-image
           path: /tmp/docker-images/ferrisrbe-server.tar.gz
+          retention-days: 1
+
+      - name: Upload worker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferrisrbe-worker-image
+          path: /tmp/docker-images/ferrisrbe-worker.tar.gz
           retention-days: 1
 
   # Run lightweight benchmarks on PR using containers
@@ -120,15 +133,22 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       
-      - name: Download image artifact
+      - name: Download server image artifact
         uses: actions/download-artifact@v4
         with:
           name: ferrisrbe-image
           path: /tmp/docker-images/
       
-      - name: Load Docker image
+      - name: Download worker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ferrisrbe-worker-image
+          path: /tmp/docker-images/
+      
+      - name: Load Docker images
         run: |
           gunzip -c /tmp/docker-images/ferrisrbe-server.tar.gz | docker load
+          gunzip -c /tmp/docker-images/ferrisrbe-worker.tar.gz | docker load
           docker images | grep ferrisrbe || true
       
       - name: Install dependencies

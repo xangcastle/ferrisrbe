@@ -137,9 +137,10 @@ def create_simple_action(command: List[str]) -> tuple:
 def execute_action(
     execution_stub: remote_execution_pb2_grpc.ExecutionStub,
     action_digest: remote_execution_pb2.Digest,
-    action_id: str
+    action_id: str,
+    timeout_secs: int = 60
 ) -> ExecutionResult:
-    """Execute a single action and measure latency"""
+    """Execute a single action with timeout protection"""
     start = time.perf_counter()
     
     try:
@@ -148,14 +149,16 @@ def execute_action(
             skip_cache_lookup=False
         )
         
-        # Start execution
-        response_stream = execution_stub.Execute(request)
+        # Start execution with timeout
+        response_stream = execution_stub.Execute(request, timeout=timeout_secs)
         
-        # Wait for completion (for simple actions that complete immediately)
-        # In real scenarios, this would be a long-running operation
+        # Wait for completion with deadline check
+        deadline = time.perf_counter() + timeout_secs
         for operation in response_stream:
             if operation.done:
                 break
+            if time.perf_counter() > deadline:
+                raise TimeoutError(f"Execution timed out after {timeout_secs}s")
         
         duration_ms = (time.perf_counter() - start) * 1000
         
@@ -163,6 +166,31 @@ def execute_action(
             action_id=action_id,
             duration_ms=duration_ms,
             success=True
+        )
+    
+    except grpc.RpcError as e:
+        duration_ms = (time.perf_counter() - start) * 1000
+        if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+            return ExecutionResult(
+                action_id=action_id,
+                duration_ms=duration_ms,
+                success=False,
+                error=f"Timeout: execution exceeded {timeout_secs}s time limit"
+            )
+        return ExecutionResult(
+            action_id=action_id,
+            duration_ms=duration_ms,
+            success=False,
+            error=f"RPC error: {e.code()} - {e.details()}"
+        )
+    
+    except TimeoutError as e:
+        duration_ms = (time.perf_counter() - start) * 1000
+        return ExecutionResult(
+            action_id=action_id,
+            duration_ms=duration_ms,
+            success=False,
+            error=str(e)
         )
     
     except Exception as e:
@@ -179,15 +207,26 @@ def run_execution_load_test(
     server: str,
     num_actions: int,
     concurrent: int,
-    command: List[str] = None
+    command: List[str] = None,
+    timeout_per_action: int = 60,
+    test_timeout_multiplier: int = 5
 ) -> ExecutionSummary:
-    """Run complete execution load test"""
+    """Run complete execution load test with timeout protection"""
     
     if command is None:
         command = ["echo", "hello"]  # Simple fast action
     
     print(f"Connecting to {server}...")
-    channel = grpc.insecure_channel(server)
+    
+    # Configure channel with keepalive timeouts
+    # Using relaxed settings for CI environment to reduce network overhead
+    channel_options = [
+        ('grpc.keepalive_time_ms', 30000),      # 30 seconds
+        ('grpc.keepalive_timeout_ms', 10000),   # 10 seconds timeout
+        ('grpc.http2.max_pings_without_data', 0),
+        ('grpc.http2.min_time_between_pings_ms', 30000),
+    ]
+    channel = grpc.insecure_channel(server, options=channel_options)
     execution_stub = remote_execution_pb2_grpc.ExecutionStub(channel)
     
     # Create test action
@@ -222,21 +261,72 @@ def run_execution_load_test(
     # Execution phase
     print(f"\nExecuting {num_actions} actions with concurrency {concurrent}...")
     print(f"Action: {' '.join(command)}")
+    print(f"Timeout per action: {timeout_per_action}s")
+    
+    # Calculate global test timeout (test_timeout_multiplier seconds per action max)
+    global_timeout = num_actions * test_timeout_multiplier
+    print(f"Global test timeout: {global_timeout}s")
     
     with ThreadPoolExecutor(max_workers=concurrent) as executor:
         futures = {
-            executor.submit(execute_action, execution_stub, action_digest, f"action-{i}"): i
+            executor.submit(
+                execute_action,
+                execution_stub,
+                action_digest,
+                f"action-{i}",
+                timeout_per_action
+            ): i
             for i in range(num_actions)
         }
         
         completed = 0
+        start_time = time.time()
+        global_timeout_reached = False
+        
         for future in as_completed(futures):
-            result = future.result()
-            summary.results.append(result)
+            # Check global timeout
+            if not global_timeout_reached and (time.time() - start_time) > global_timeout:
+                global_timeout_reached = True
+                print(f"\n  WARNING: Global test timeout ({global_timeout}s) reached")
+                print(f"  Completed {completed}/{num_actions} actions so far")
+                # Cancel remaining futures
+                for f in futures:
+                    if not f.done():
+                        f.cancel()
+            
+            try:
+                # Get result with timeout per future
+                result = future.result(timeout=timeout_per_action)
+                summary.results.append(result)
+            except Exception as e:
+                # Handle timeout or other errors
+                action_id = f"action-{futures[future]}"
+                summary.results.append(ExecutionResult(
+                    action_id=action_id,
+                    duration_ms=0,
+                    success=False,
+                    error=f"Future error: {str(e)}"
+                ))
+            
             completed += 1
             if completed % 100 == 0 or completed == num_actions:
                 success_rate = summary.success_count / completed * 100
                 print(f"  Completed {completed}/{num_actions} - Success: {success_rate:.1f}%")
+                
+                if global_timeout_reached:
+                    break
+        
+        # Mark remaining actions as failed if timeout was reached
+        if global_timeout_reached:
+            remaining = num_actions - len(summary.results)
+            for i in range(len(summary.results), num_actions):
+                summary.results.append(ExecutionResult(
+                    action_id=f"action-{i}",
+                    duration_ms=0,
+                    success=False,
+                    error=f"Cancelled: global timeout ({global_timeout}s) reached"
+                ))
+            print(f"  Marked {remaining} remaining actions as failed due to timeout")
     
     channel.close()
     return summary

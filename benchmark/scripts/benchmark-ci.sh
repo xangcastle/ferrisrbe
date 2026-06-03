@@ -25,6 +25,12 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 CONTAINER_NAME_FULL="${CONTAINER_NAME}-${TIMESTAMP}"
 
 LOCAL_IMAGE_TAG="ferrisrbe/server:latest"
+LOCAL_WORKER_IMAGE_TAG="ferrisrbe/worker:latest"
+WORKER_CONTAINER_NAME="ferrisrbe-worker"
+WORKER_CONTAINER_FULL="${WORKER_CONTAINER_NAME}-${TIMESTAMP}"
+
+# Worker configuration
+WORKER_MEMORY_LIMIT="${WORKER_MEMORY_LIMIT:-512m}"
 
 # Colors
 RED='\033[0;31m'
@@ -52,6 +58,9 @@ cleanup() {
     
     # Stop and remove any lingering containers with our prefix
     docker ps -aq --filter "name=${CONTAINER_NAME}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    
+    # Stop worker container
+    stop_worker_container
     
     # Remove network if it exists
     if docker network ls --format '{{.Name}}' | grep -q "^${NETWORK_NAME}$"; then
@@ -278,6 +287,85 @@ stop_server_container() {
     fi
 }
 
+# Start worker container
+start_worker_container() {
+    local image_tag="${1:-$LOCAL_WORKER_IMAGE_TAG}"
+    local container_name="${WORKER_CONTAINER_FULL}"
+    
+    log_info "Starting FerrisRBE worker container: $image_tag"
+    
+    # Verify image exists
+    if ! docker image inspect "$image_tag" >/dev/null 2>&1; then
+        log_error "Worker image $image_tag not found"
+        exit 1
+    fi
+    
+    # Generate unique worker ID
+    local worker_id="benchmark-worker-$(hostname)-$(date +%s)"
+    
+    # Ensure CAS_ENDPOINT is set
+    if [ -z "$CAS_ENDPOINT" ]; then
+        export CAS_ENDPOINT="localhost:9094"
+    fi
+    
+    log_info "Using SERVER_ENDPOINT: http://localhost:9092"
+    log_info "Using CAS_ENDPOINT: $CAS_ENDPOINT"
+    log_info "Worker ID: $worker_id"
+    
+    # Start container with host networking
+    # Note: Using host networking for simplicity in CI, but could use bridge network
+    docker run -d \
+        --name "$container_name" \
+        --network host \
+        -e WORKER_ID="$worker_id" \
+        -e SERVER_ENDPOINT="http://localhost:9092" \
+        -e CAS_ENDPOINT="$CAS_ENDPOINT" \
+        -e RUST_LOG=info \
+        -e MAX_CONCURRENT=4 \
+        --memory="$WORKER_MEMORY_LIMIT" \
+        "$image_tag" >/dev/null 2>&1
+    
+    WORKER_CONTAINER="$container_name"
+    
+    # Wait for worker to register
+    log_info "Waiting for worker to register..."
+    for i in {1..30}; do
+        logs=$(docker logs "$container_name" 2>&1 || true)
+        # Check for successful registration indicators and no errors
+        if echo "$logs" | grep -qiE "(registration successful|connected to server|worker ready)" && \
+           ! echo "$logs" | grep -qiE "(error|failed|connection refused)"; then
+            log_success "Worker registered successfully"
+            sleep 1
+            return 0
+        fi
+        # Check for early errors
+        if echo "$logs" | grep -qiE "(error|failed|connection refused)"; then
+            log_error "Worker failed to start. Logs:"
+            echo "$logs" | tail -20
+            exit 1
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+            log_info "Waiting for worker registration... (attempt $i/30)"
+            docker logs "$container_name" --tail 3 2>/dev/null || true
+        fi
+        sleep 1
+    done
+    
+    log_warn "Worker may not have registered yet, continuing anyway..."
+    docker logs "$container_name" --tail 10 2>/dev/null || true
+}
+
+# Stop worker container
+stop_worker_container() {
+    local container_name="${1:-$WORKER_CONTAINER}"
+    
+    if [ -n "$container_name" ]; then
+        log_info "Stopping worker container: $container_name"
+        docker stop "$container_name" >/dev/null 2>&1 || true
+        docker rm "$container_name" >/dev/null 2>&1 || true
+    fi
+}
+
 # Get container memory usage
 get_container_memory() {
     local container_name="${1:-$SERVER_CONTAINER}"
@@ -322,6 +410,11 @@ run_light_benchmarks() {
     # 1. Memory footprint (quick)
     log_info "Test 1/5: Memory footprint..."
     run_memory_benchmark
+    
+    # Start worker for execution tests
+    log_info "Starting worker container for execution tests..."
+    start_worker_container
+    sleep 2
     
     # 2. Execution throughput (reduced load)
     log_info "Test 2/5: Execution throughput (light)..."
@@ -421,6 +514,11 @@ run_full_benchmarks() {
     # 1. Memory footprint (extended)
     log_info "Test 1/8: Memory footprint..."
     run_memory_benchmark
+    
+    # Start worker for execution tests
+    log_info "Starting worker container for execution tests..."
+    start_worker_container
+    sleep 2
     
     # 2. Execution throughput
     log_info "Test 2/8: Execution throughput..."
