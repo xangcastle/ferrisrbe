@@ -34,6 +34,7 @@ TARGETS:
     buildfarm       Run benchmark against Bazel Buildfarm
     buildbarn       Run benchmark against Buildbarn
     buildbuddy      Run benchmark against BuildBuddy
+    nativelink      Run benchmark against NativeLink
     all             Run all benchmarks sequentially
     compare         Generate comparison report from existing results
 
@@ -141,9 +142,39 @@ cleanup() {
         buildbuddy)
             docker-compose -f "$BENCHMARK_DIR/docker-compose.buildbuddy.yml" down -v 2>/dev/null || true
             ;;
+        nativelink)
+            docker-compose -f "$BENCHMARK_DIR/docker-compose.nativelink.yml" down -v 2>/dev/null || true
+            ;;
     esac
     
     log_success "Cleanup complete"
+}
+
+# Extract BuildBuddy API key from its in-process SQLite DB
+# BuildBuddy Enterprise requires an API key even for anonymous usage; the key
+# is generated on first startup and stored at /tmp/buildbuddy.db inside the
+# container.
+extract_buildbuddy_api_key() {
+    local tmpdb
+    tmpdb=$(mktemp /tmp/buildbuddy_bench_XXXXXX.db)
+
+    docker cp buildbuddy-server:/tmp/buildbuddy.db "${tmpdb}" 2>/dev/null || { rm -f "${tmpdb}"; echo ""; return; }
+    docker cp buildbuddy-server:/tmp/buildbuddy.db-wal "${tmpdb}-wal" 2>/dev/null || true
+    docker cp buildbuddy-server:/tmp/buildbuddy.db-shm "${tmpdb}-shm" 2>/dev/null || true
+
+    local api_key
+    api_key=$(python3 - <<PYEOF
+import sqlite3, sys
+try:
+    conn = sqlite3.connect('${tmpdb}')
+    rows = conn.execute('SELECT value FROM APIKeys LIMIT 1').fetchall()
+    print(rows[0][0] if rows else '', end='')
+except Exception:
+    print('', end='')
+PYEOF
+)
+    rm -f "${tmpdb}" "${tmpdb}-wal" "${tmpdb}-shm"
+    echo "$api_key"
 }
 
 # Wait for service to be healthy
@@ -217,6 +248,10 @@ EOF
             wait_for_service localhost 8080 "BuildBuddy Web UI"
             sleep 10
             ;;
+        nativelink)
+            wait_for_service localhost 9092 "NativeLink Server"
+            sleep 5  # Give extra time for worker registration
+            ;;
     esac
     
     # Get the server container name
@@ -240,12 +275,26 @@ EOF
     
     # Run load test
     log_info "Running load test: $BLOBS blobs x $BLOB_SIZE bytes (concurrent: $CONCURRENT)"
-    
+
+    local api_key_arg=""
+    if [[ "$target" == "buildbuddy" ]]; then
+        local bb_key
+        bb_key=$(extract_buildbuddy_api_key)
+        if [[ -n "$bb_key" ]]; then
+            log_info "BuildBuddy API key extracted (${#bb_key} chars)"
+            api_key_arg="--api-key $bb_key"
+        else
+            log_warn "Could not extract BuildBuddy API key; CAS test will likely fail"
+        fi
+    fi
+
+    # shellcheck disable=SC2086
     python3 "$SCRIPT_DIR/cas-load-test.py" \
         --server localhost:9092 \
         --blobs "$BLOBS" \
         --size "$BLOB_SIZE" \
         --concurrent "$CONCURRENT" \
+        $api_key_arg \
         --output "$result_dir/loadtest.json" || {
         log_warn "Load test encountered errors (this may be expected for some configurations)"
     }
@@ -281,11 +330,20 @@ EOF
     
     log_success "Benchmark complete for $target"
     log_info "Results saved to: $result_dir"
-    
+
+    # Optional post-benchmark hook (e.g., O(1) streaming test)
+    if [[ -n "${POST_BENCHMARK_CMD:-}" ]]; then
+        log_info "Running post-benchmark hook for $target..."
+        # shellcheck disable=SC2086
+        $POST_BENCHMARK_CMD "$target" "$server_container" "$result_dir" || {
+            log_warn "Post-benchmark hook failed for $target"
+        }
+    fi
+
     # Cleanup
     log_info "Stopping $target stack..."
     docker-compose -f "$compose_file" down -v
-    
+
     echo "$result_dir"
 }
 
@@ -364,7 +422,7 @@ with open(report_file, 'w') as f:
     f.write("## Raw Data\\n\\n")
     f.write("Full results are available in the following directories:\\n")
     for d in glob.glob(f"{results_dir}/*/"):
-        f.write(f"- `{d}`\\n")
+        f.write(f"- \`{d}\`\\n")
 
 print(f"Report generated: {report_file}")
 EOF
@@ -385,11 +443,11 @@ main() {
     
     # Run benchmark(s)
     case "$TARGET" in
-        ferrisrbe|buildfarm|buildbarn|buildbuddy)
+        ferrisrbe|buildfarm|buildbarn|buildbuddy|nativelink)
             run_benchmark "$TARGET"
             ;;
         all)
-            for target in ferrisrbe buildfarm buildbarn buildbuddy; do
+            for target in ferrisrbe buildfarm buildbarn buildbuddy nativelink; do
                 log_info "======================================="
                 log_info "Running benchmark: $target"
                 log_info "======================================="

@@ -236,6 +236,11 @@ impl ExecutionEngine {
     async fn cleanup_loop(&self) {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
 
+        let results_ttl_secs: u64 = std::env::var("RBE_RESULTS_TTL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+
         loop {
             interval.tick().await;
 
@@ -248,6 +253,11 @@ impl ExecutionEngine {
                 .scheduler
                 .cleanup_stale_actions(Duration::from_secs(3600));
             debug!("Scheduler has {} in-flight actions", stale);
+
+            let results_cleaned = self.results_store.cleanup_old(results_ttl_secs);
+            if results_cleaned > 0 {
+                info!("Cleaned up {} old results (ttl={}s)", results_cleaned, results_ttl_secs);
+            }
         }
     }
 

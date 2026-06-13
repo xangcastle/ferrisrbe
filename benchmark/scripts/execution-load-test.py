@@ -119,10 +119,21 @@ def create_simple_action(command: List[str]) -> tuple:
         hash=hashlib.sha256(command_bytes).hexdigest(),
         size_bytes=len(command_bytes)
     )
-    
+
+    # REAPI requires input_root_digest even for actions with no inputs; it
+    # must reference a (possibly empty) Directory present in the CAS. Strict
+    # servers (e.g. NativeLink) reject actions without it.
+    input_root_proto = remote_execution_pb2.Directory()
+    input_root_bytes = input_root_proto.SerializeToString()
+    input_root_digest = remote_execution_pb2.Digest(
+        hash=hashlib.sha256(input_root_bytes).hexdigest(),
+        size_bytes=len(input_root_bytes)
+    )
+
     # Create action proto
     action_proto = remote_execution_pb2.Action(
         command_digest=command_digest,
+        input_root_digest=input_root_digest,
         do_not_cache=False
     )
     action_bytes = action_proto.SerializeToString()
@@ -130,8 +141,9 @@ def create_simple_action(command: List[str]) -> tuple:
         hash=hashlib.sha256(action_bytes).hexdigest(),
         size_bytes=len(action_bytes)
     )
-    
-    return action_digest, action_bytes, command_digest, command_bytes
+
+    return (action_digest, action_bytes, command_digest, command_bytes,
+            input_root_digest, input_root_bytes)
 
 
 def execute_action(
@@ -231,9 +243,10 @@ def run_execution_load_test(
     
     # Create test action
     print(f"Creating test action: {' '.join(command)}")
-    action_digest, action_bytes, cmd_digest, cmd_bytes = create_simple_action(command)
-    
-    # Upload action to CAS first (optional, depends on RBE implementation)
+    (action_digest, action_bytes, cmd_digest, cmd_bytes,
+     input_root_digest, input_root_bytes) = create_simple_action(command)
+
+    # Upload action, command and input root to CAS first
     cas_stub = remote_execution_pb2_grpc.ContentAddressableStorageStub(channel)
     try:
         cas_request = remote_execution_pb2.BatchUpdateBlobsRequest(
@@ -245,6 +258,10 @@ def run_execution_load_test(
                 remote_execution_pb2.BatchUpdateBlobsRequest.Request(
                     digest=cmd_digest,
                     data=cmd_bytes
+                ),
+                remote_execution_pb2.BatchUpdateBlobsRequest.Request(
+                    digest=input_root_digest,
+                    data=input_root_bytes
                 )
             ]
         )

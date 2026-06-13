@@ -14,9 +14,12 @@ use crate::proto::build::bazel::remote::execution::v2::{
 };
 use crate::proto::google::rpc::Status as RpcStatus;
 
-use crate::cas::{CasBackend, CasError};
+use crate::cas::{CasBackend, CasError, CasResult};
 use crate::types::DigestInfo;
+use bytes::Bytes;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// CAS (Content Addressable Storage) Service
 ///
@@ -43,8 +46,9 @@ impl CasService {
     }
 
     /// Convert REAPI Digest to internal DigestInfo
-    fn to_digest_info(digest: &Digest) -> DigestInfo {
+    fn to_digest_info(digest: &Digest) -> Result<DigestInfo, Status> {
         DigestInfo::new(&digest.hash, digest.size_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))
     }
 
     /// Convert CasError to tonic Status
@@ -65,23 +69,36 @@ impl ContentAddressableStorage for CasService {
         &self,
         request: Request<FindMissingBlobsRequest>,
     ) -> Result<Response<FindMissingBlobsResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
         let requested_count = req.blob_digests.len();
 
-        let mut missing = Vec::new();
-        for digest in req.blob_digests {
-            let digest_info = Self::to_digest_info(&digest);
-            match self.backend.contains(&digest_info).await {
-                Ok(false) => missing.push(digest),
-                Ok(true) => {}
-                Err(e) => return Err(Self::to_status(e)),
-            }
-        }
+        let digest_infos: Vec<DigestInfo> = req
+            .blob_digests
+            .iter()
+            .map(Self::to_digest_info)
+            .collect::<Result<Vec<_>, _>>()?;
+        let missing_infos = match self.backend.find_missing(&digest_infos).await {
+            Ok(missing) => missing,
+            Err(e) => return Err(Self::to_status(e)),
+        };
+
+        // Map back to proto digests preserving the original order among missing ones.
+        let missing_hashes: std::collections::HashSet<String> = missing_infos
+            .iter()
+            .map(|d| d.hash_to_string())
+            .collect();
+        let missing: Vec<Digest> = req
+            .blob_digests
+            .into_iter()
+            .filter(|d| missing_hashes.contains(&d.hash))
+            .collect();
 
         info!(
-            "📡 CAS::FindMissingBlobs - requested: {}, missing: {}",
+            "📡 CAS::FindMissingBlobs - requested: {}, missing: {}, elapsed_ms: {}",
             requested_count,
-            missing.len()
+            missing.len(),
+            start.elapsed().as_millis()
         );
 
         Ok(Response::new(FindMissingBlobsResponse {
@@ -93,22 +110,53 @@ impl ContentAddressableStorage for CasService {
         &self,
         request: Request<BatchUpdateBlobsRequest>,
     ) -> Result<Response<BatchUpdateBlobsResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
-        let mut responses = Vec::new();
 
+        // Preserve original order and map each digest to its data.
+        let mut ordered_digests = Vec::with_capacity(req.requests.len());
+        let mut items: Vec<(DigestInfo, Bytes)> = Vec::with_capacity(req.requests.len());
         for blob_req in req.requests {
             let digest = blob_req
                 .digest
                 .clone()
                 .ok_or_else(|| Status::invalid_argument("Missing digest"))?;
+            let digest_info = Self::to_digest_info(&digest)?;
+            let data = Bytes::from(blob_req.data);
+            ordered_digests.push((digest, digest_info.hash_to_string()));
+            items.push((digest_info, data));
+        }
 
-            let digest_info = Self::to_digest_info(&digest);
-            let data = bytes::Bytes::from(blob_req.data);
-            let hash = digest.hash.clone();
+        let batch_results = match self.backend.batch_write(&items).await {
+            Ok(results) => results,
+            Err(e) => {
+                // Backend-level failure: mark every item as failed so we still
+                // return a valid REAPI response.
+                tracing::error!("BatchUpdateBlobs backend failure: {}", e);
+                let mut responses = Vec::with_capacity(ordered_digests.len());
+                for (digest, _hash) in ordered_digests {
+                    responses.push(batch_update_blobs_response::Response {
+                        digest: Some(digest),
+                        status: Some(RpcStatus {
+                            code: 2,
+                            message: e.to_string(),
+                            details: vec![],
+                        }),
+                    });
+                }
+                return Ok(Response::new(BatchUpdateBlobsResponse { responses }));
+            }
+        };
 
-            match self.backend.write(&digest_info, data).await {
-                Ok(()) => {
-                    // REAPI v2.4: Use RpcStatus instead of status_code
+        let result_by_hash: HashMap<String, CasResult<()>> = batch_results
+            .into_iter()
+            .map(|(digest, result)| (digest.hash_to_string(), result))
+            .collect();
+
+        let mut responses = Vec::with_capacity(ordered_digests.len());
+        for (digest, hash) in ordered_digests {
+            match result_by_hash.get(&hash) {
+                Some(Ok(())) => {
                     responses.push(batch_update_blobs_response::Response {
                         digest: Some(digest),
                         status: Some(RpcStatus {
@@ -118,7 +166,8 @@ impl ContentAddressableStorage for CasService {
                         }),
                     });
                 }
-                Err(e) => {
+                Some(Err(e)) => {
+                    tracing::error!("Failed to write blob {}: {}", hash, e);
                     responses.push(batch_update_blobs_response::Response {
                         digest: Some(digest),
                         status: Some(RpcStatus {
@@ -127,12 +176,26 @@ impl ContentAddressableStorage for CasService {
                             details: vec![],
                         }),
                     });
-                    tracing::error!("Failed to write blob {}: {}", hash, e);
+                }
+                None => {
+                    tracing::error!("Missing result for blob {} in batch response", hash);
+                    responses.push(batch_update_blobs_response::Response {
+                        digest: Some(digest),
+                        status: Some(RpcStatus {
+                            code: 2,
+                            message: "Missing result in batch response".to_string(),
+                            details: vec![],
+                        }),
+                    });
                 }
             }
         }
 
-        info!("✅ CAS::BatchUpdateBlobs updated={}", responses.len());
+        info!(
+            "✅ CAS::BatchUpdateBlobs updated={}, elapsed_ms={}",
+            responses.len(),
+            start.elapsed().as_millis()
+        );
 
         Ok(Response::new(BatchUpdateBlobsResponse { responses }))
     }
@@ -141,16 +204,54 @@ impl ContentAddressableStorage for CasService {
         &self,
         request: Request<BatchReadBlobsRequest>,
     ) -> Result<Response<BatchReadBlobsResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
-        let mut responses = Vec::new();
 
-        for digest in req.digests {
-            let digest_info = Self::to_digest_info(&digest);
-            let hash = digest.hash.clone();
+        let ordered_digests: Vec<(Digest, DigestInfo, String)> = req
+            .digests
+            .into_iter()
+            .map(|digest| -> Result<(Digest, DigestInfo, String), Status> {
+                let digest_info = Self::to_digest_info(&digest)?;
+                let hash = digest.hash.clone();
+                Ok((digest, digest_info, hash))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-            match self.backend.read(&digest_info).await {
-                Ok(Some(data)) => {
-                    // REAPI v2.4: Use RpcStatus instead of status_code
+        let digest_infos: Vec<DigestInfo> = ordered_digests
+            .iter()
+            .map(|(_, info, _)| *info)
+            .collect();
+
+        let batch_results = match self.backend.batch_read(&digest_infos).await {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::error!("BatchReadBlobs backend failure: {}", e);
+                let mut responses = Vec::with_capacity(ordered_digests.len());
+                for (digest, _info, _hash) in ordered_digests {
+                    responses.push(batch_read_blobs_response::Response {
+                        digest: Some(digest),
+                        data: Vec::new(),
+                        compressor: 0,
+                        status: Some(RpcStatus {
+                            code: 2,
+                            message: e.to_string(),
+                            details: vec![],
+                        }),
+                    });
+                }
+                return Ok(Response::new(BatchReadBlobsResponse { responses }));
+            }
+        };
+
+        let data_by_hash: HashMap<String, Option<Bytes>> = batch_results
+            .into_iter()
+            .map(|(digest, data)| (digest.hash_to_string(), data))
+            .collect();
+
+        let mut responses = Vec::with_capacity(ordered_digests.len());
+        for (digest, _info, hash) in ordered_digests {
+            match data_by_hash.get(&hash) {
+                Some(Some(data)) => {
                     responses.push(batch_read_blobs_response::Response {
                         digest: Some(digest),
                         data: data.to_vec(),
@@ -162,7 +263,7 @@ impl ContentAddressableStorage for CasService {
                         }),
                     });
                 }
-                Ok(None) => {
+                Some(None) => {
                     responses.push(batch_read_blobs_response::Response {
                         digest: Some(digest),
                         data: Vec::new(),
@@ -174,23 +275,27 @@ impl ContentAddressableStorage for CasService {
                         }),
                     });
                 }
-                Err(e) => {
+                None => {
+                    tracing::error!("Missing result for blob {} in batch response", hash);
                     responses.push(batch_read_blobs_response::Response {
                         digest: Some(digest),
                         data: Vec::new(),
                         compressor: 0,
                         status: Some(RpcStatus {
                             code: 2,
-                            message: e.to_string(),
+                            message: "Missing result in batch response".to_string(),
                             details: vec![],
                         }),
                     });
-                    tracing::error!("Failed to read blob {}: {}", hash, e);
                 }
             }
         }
 
-        info!("📡 CAS::BatchReadBlobs read={}", responses.len());
+        info!(
+            "📡 CAS::BatchReadBlobs read={}, elapsed_ms={}",
+            responses.len(),
+            start.elapsed().as_millis()
+        );
 
         Ok(Response::new(BatchReadBlobsResponse { responses }))
     }

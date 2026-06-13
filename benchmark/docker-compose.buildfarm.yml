@@ -10,11 +10,13 @@ services:
     ports:
       - "9092:9092"      # REAPI gRPC (standardized port for comparison)
       - "9093:9093"      # JMX/Metrics
+    # bazelbuild/buildfarm:latest ignores CLI arguments and always loads the
+    # baked-in /app/build_buildfarm/config.minimal.yml, so the benchmark
+    # config is mounted over that path.
     volumes:
-      - ./config/buildfarm-server.config:/app/buildfarm-server.config:ro
+      - ./config/buildfarm-server.config:/app/build_buildfarm/config.minimal.yml:ro
     environment:
       - JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=9093 -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.authenticate=false
-    command: ["/app/buildfarm-server", "/app/buildfarm-server.config"]
     networks:
       - benchmark-network
     depends_on:
@@ -32,11 +34,10 @@ services:
     container_name: buildfarm-worker
     privileged: true
     volumes:
-      - ./config/buildfarm-worker.config:/app/buildfarm-worker.config:ro
+      - ./config/buildfarm-worker.config:/app/build_buildfarm/config.minimal.yml:ro
       - worker-workspace:/tmp/worker
     environment:
       - JAVA_OPTS=-Xmx2g -Xms512m -XX:+UseG1GC
-    command: ["/app/buildfarm-worker", "/app/buildfarm-worker.config"]
     networks:
       - benchmark-network
     depends_on:

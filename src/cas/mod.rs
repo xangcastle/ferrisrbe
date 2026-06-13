@@ -68,6 +68,52 @@ pub trait CasBackend: Send + Sync + 'static {
         stream: BoxStream<'static, CasResult<Bytes>>,
     ) -> CasResult<()>;
 
+    /// Find which of the provided digests are missing from storage.
+    ///
+    /// Backends that support batched existence checks (e.g. gRPC CAS)
+    /// should override this default to issue a single round-trip.
+    async fn find_missing(&self, digests: &[crate::types::DigestInfo]) -> CasResult<Vec<crate::types::DigestInfo>> {
+        let mut missing = Vec::new();
+        for digest in digests {
+            if !self.contains(digest).await? {
+                missing.push(*digest);
+            }
+        }
+        Ok(missing)
+    }
+
+    /// Read multiple blobs in a single backend call.
+    ///
+    /// Backends that support batched reads (e.g. gRPC CAS)
+    /// should override this default to issue a single round-trip.
+    async fn batch_read(
+        &self,
+        digests: &[crate::types::DigestInfo],
+    ) -> CasResult<Vec<(crate::types::DigestInfo, Option<Bytes>)>> {
+        let mut results = Vec::with_capacity(digests.len());
+        for digest in digests {
+            let data = self.read(digest).await?;
+            results.push((*digest, data));
+        }
+        Ok(results)
+    }
+
+    /// Write multiple blobs in a single backend call.
+    ///
+    /// Backends that support batched writes (e.g. gRPC CAS)
+    /// should override this default to issue a single round-trip.
+    async fn batch_write(
+        &self,
+        items: &[(crate::types::DigestInfo, Bytes)],
+    ) -> CasResult<Vec<(crate::types::DigestInfo, CasResult<()>)>> {
+        let mut results = Vec::with_capacity(items.len());
+        for (digest, data) in items {
+            let result = self.write(digest, data.clone()).await;
+            results.push((*digest, result));
+        }
+        Ok(results)
+    }
+
     /// Delete a blob from storage
     ///
     /// Returns `Ok(())` even if the blob doesn't exist (idempotent).

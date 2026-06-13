@@ -278,6 +278,11 @@ docker-compose -f docker-compose.buildfarm.yml down -v
 docker-compose -f docker-compose.buildbarn.yml up -d
 ./scripts/execution-load-test.py --server localhost:9092
 docker-compose -f docker-compose.buildbarn.yml down -v
+
+# Test NativeLink (upstream Docker image)
+docker-compose -f docker-compose.nativelink.yml up -d
+./scripts/execution-load-test.py --server localhost:9092
+docker-compose -f docker-compose.nativelink.yml down -v
 ```
 
 ## 📝 Implementation Notes
@@ -290,6 +295,7 @@ docker-compose -f docker-compose.buildbarn.yml down -v
 | **Buildfarm** | Java | Redis-backed queue | Redis | Mature, JVM GC pauses |
 | **Buildbarn** | Go | Custom scheduler | Separate storage service | Modular, complex |
 | **BuildBuddy** | Java/Go | Custom | PostgreSQL + Redis | Enterprise features |
+| **NativeLink** | Rust | Simple (property matching) | In-process fast/slow store | Zero-GC, CAS in-process (no sidecar) |
 
 ### Why Container-Native is Better for FerrisRBE
 
@@ -314,6 +320,7 @@ docker-compose -f docker-compose.buildbarn.yml down -v
 - [Bazel Buildfarm](https://github.com/bazelbuild/bazel-buildfarm)
 - [Buildbarn](https://github.com/buildbarn/bb-deployments)
 - [BuildBuddy](https://github.com/buildbuddy-io/buildbuddy)
+- [NativeLink](https://github.com/TraceMachina/nativelink)
 - [rules_oci](https://github.com/bazel-contrib/rules_oci) - Bazel OCI rules
 - [DashMap](https://github.com/xacrimon/dashmap) - Rust concurrent hash map
 - [GitHub Actions Benchmark](https://github.com/benchmark-action/github-action-benchmark)

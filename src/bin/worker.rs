@@ -530,8 +530,26 @@ impl ResilientRbeWorker {
         }
 
         if let Some(input_root_digest) = assignment.input_root_digest {
-            let digest_info =
-                DigestInfo::new(&input_root_digest.hash, input_root_digest.size_bytes);
+            let digest_info = match DigestInfo::new(
+                &input_root_digest.hash,
+                input_root_digest.size_bytes,
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    return ProtoExecutionResult {
+                        execution_id,
+                        worker_id: self.config.worker_id.clone(),
+                        exit_code: -1,
+                        stdout: vec![],
+                        stderr: format!("Invalid input_root_digest: {}", e).into_bytes(),
+                        output_digests: vec![],
+                        output_files: vec![],
+                        output_directories: vec![],
+                        execution_duration_ms: start.elapsed().as_millis() as i64,
+                        completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    };
+                }
+            };
 
             info!("Materializing input root: {}", digest_info.hash_to_string());
 
@@ -591,20 +609,67 @@ impl ResilientRbeWorker {
             }
         }
 
+        // Basic sandboxing: isolate HOME and TMPDIR inside the execution directory
+        // and clear potentially dangerous environment variables.
+        let home_dir = exec_dir.join(".home");
+        let tmp_dir = exec_dir.join(".tmp");
+        if let Err(e) = tokio::fs::create_dir_all(&home_dir).await {
+            warn!("Failed to create sandbox home dir {:?}: {}", home_dir, e);
+        }
+        if let Err(e) = tokio::fs::create_dir_all(&tmp_dir).await {
+            warn!("Failed to create sandbox tmp dir {:?}: {}", tmp_dir, e);
+        }
+
         let output = if assignment.command.is_empty() {
             tokio::process::Command::new("echo")
                 .arg(format!("Executed: {}", execution_id))
                 .current_dir(&exec_dir)
+                .env_clear()
+                .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+                .env("HOME", &home_dir)
+                .env("TMPDIR", &tmp_dir)
                 .output()
                 .await
         } else {
-            let mut cmd = tokio::process::Command::new(&assignment.command[0]);
+            // Reject absolute paths to executables outside the workspace as a basic
+            // sandbox measure. Relative commands are resolved via PATH.
+            let program = &assignment.command[0];
+            let program_path = Path::new(program);
+            if program_path.is_absolute() && !program_path.starts_with(&exec_dir) {
+                return ProtoExecutionResult {
+                    execution_id,
+                    worker_id: self.config.worker_id.clone(),
+                    exit_code: -1,
+                    stdout: vec![],
+                    stderr: format!(
+                        "Sandbox violation: absolute executable '{}' outside workspace is not allowed",
+                        program
+                    )
+                    .into_bytes(),
+                    output_digests: vec![],
+                    output_files: vec![],
+                    output_directories: vec![],
+                    execution_duration_ms: start.elapsed().as_millis() as i64,
+                    completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                };
+            }
+
+            let mut cmd = tokio::process::Command::new(program);
             if assignment.command.len() > 1 {
                 cmd.args(&assignment.command[1..]);
             }
 
+            cmd.env_clear()
+                .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+                .env("HOME", &home_dir)
+                .env("TMPDIR", &tmp_dir);
+
             for env_var in &assignment.environment_variables {
-                cmd.env(&env_var.name, &env_var.value);
+                // Do not allow the action to override sandbox-critical variables.
+                let name_upper = env_var.name.to_uppercase();
+                if !["PATH", "HOME", "TMPDIR", "LD_PRELOAD", "LD_LIBRARY_PATH"].contains(&name_upper.as_str()) {
+                    cmd.env(&env_var.name, &env_var.value);
+                }
             }
 
             cmd.current_dir(&exec_dir).output().await
@@ -731,7 +796,27 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let config = ResilientWorkerConfig::from_env();
+
+    // Seed the per-thread fastrand generator with a value derived from the
+    // worker id so that jitter sequences are deterministic per worker. This
+    // prevents reconnection storms when many workers restart at the same time.
+    seed_fastrand_from_worker_id(&config.worker_id);
+
     let mut worker = ResilientRbeWorker::new(config).await?;
 
     worker.run().await
+}
+
+/// Compute a deterministic u64 seed from a worker id and seed fastrand's
+/// thread-local generator.
+fn seed_fastrand_from_worker_id(worker_id: &str) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    worker_id.hash(&mut hasher);
+    let seed = hasher.finish();
+
+    fastrand::seed(seed);
+    info!("Seeded fastrand with worker_id={} seed={}", worker_id, seed);
 }
