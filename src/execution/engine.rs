@@ -256,7 +256,10 @@ impl ExecutionEngine {
 
             let results_cleaned = self.results_store.cleanup_old(results_ttl_secs);
             if results_cleaned > 0 {
-                info!("Cleaned up {} old results (ttl={}s)", results_cleaned, results_ttl_secs);
+                info!(
+                    "Cleaned up {} old results (ttl={}s)",
+                    results_cleaned, results_ttl_secs
+                );
             }
         }
     }

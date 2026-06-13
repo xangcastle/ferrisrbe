@@ -530,26 +530,24 @@ impl ResilientRbeWorker {
         }
 
         if let Some(input_root_digest) = assignment.input_root_digest {
-            let digest_info = match DigestInfo::new(
-                &input_root_digest.hash,
-                input_root_digest.size_bytes,
-            ) {
-                Ok(d) => d,
-                Err(e) => {
-                    return ProtoExecutionResult {
-                        execution_id,
-                        worker_id: self.config.worker_id.clone(),
-                        exit_code: -1,
-                        stdout: vec![],
-                        stderr: format!("Invalid input_root_digest: {}", e).into_bytes(),
-                        output_digests: vec![],
-                        output_files: vec![],
-                        output_directories: vec![],
-                        execution_duration_ms: start.elapsed().as_millis() as i64,
-                        completed_at_ms: chrono::Utc::now().timestamp_millis(),
-                    };
-                }
-            };
+            let digest_info =
+                match DigestInfo::new(&input_root_digest.hash, input_root_digest.size_bytes) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        return ProtoExecutionResult {
+                            execution_id,
+                            worker_id: self.config.worker_id.clone(),
+                            exit_code: -1,
+                            stdout: vec![],
+                            stderr: format!("Invalid input_root_digest: {}", e).into_bytes(),
+                            output_digests: vec![],
+                            output_files: vec![],
+                            output_directories: vec![],
+                            execution_duration_ms: start.elapsed().as_millis() as i64,
+                            completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        };
+                    }
+                };
 
             info!("Materializing input root: {}", digest_info.hash_to_string());
 
@@ -667,7 +665,9 @@ impl ResilientRbeWorker {
             for env_var in &assignment.environment_variables {
                 // Do not allow the action to override sandbox-critical variables.
                 let name_upper = env_var.name.to_uppercase();
-                if !["PATH", "HOME", "TMPDIR", "LD_PRELOAD", "LD_LIBRARY_PATH"].contains(&name_upper.as_str()) {
+                if !["PATH", "HOME", "TMPDIR", "LD_PRELOAD", "LD_LIBRARY_PATH"]
+                    .contains(&name_upper.as_str())
+                {
                     cmd.env(&env_var.name, &env_var.value);
                 }
             }

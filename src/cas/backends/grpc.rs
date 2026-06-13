@@ -244,7 +244,9 @@ impl CasBackend for GrpcCasBackend {
                                 .map_err(|e| CasError::Storage(format!("Invalid digest: {}", e)))
                         })
                         .transpose()?
-                        .ok_or_else(|| CasError::Storage("Missing digest in batch read response".to_string()))?;
+                        .ok_or_else(|| {
+                            CasError::Storage("Missing digest in batch read response".to_string())
+                        })?;
                     let status_code = response.status.as_ref().map(|s| s.code).unwrap_or(0);
                     let data = if status_code == 0 {
                         Some(response.data.into())
@@ -379,7 +381,9 @@ impl CasBackend for GrpcCasBackend {
                                 .map_err(|e| CasError::Storage(format!("Invalid digest: {}", e)))
                         })
                         .transpose()?
-                        .ok_or_else(|| CasError::Storage("Missing digest in batch write response".to_string()))?;
+                        .ok_or_else(|| {
+                            CasError::Storage("Missing digest in batch write response".to_string())
+                        })?;
                     let status_code = response.status.as_ref().map(|s| s.code).unwrap_or(0);
                     let result = if status_code == 0 {
                         Ok(())

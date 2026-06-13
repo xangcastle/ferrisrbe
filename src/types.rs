@@ -99,13 +99,15 @@ impl DigestInfo {
             let high = Self::hex_char_to_nibble(bytes[i * 2]).map_err(|_| {
                 RbeError::InvalidDigest(format!(
                     "invalid hex character '{}' at position {}",
-                    bytes[i * 2] as char, i * 2
+                    bytes[i * 2] as char,
+                    i * 2
                 ))
             })?;
             let low = Self::hex_char_to_nibble(bytes[i * 2 + 1]).map_err(|_| {
                 RbeError::InvalidDigest(format!(
                     "invalid hex character '{}' at position {}",
-                    bytes[i * 2 + 1] as char, i * 2 + 1
+                    bytes[i * 2 + 1] as char,
+                    i * 2 + 1
                 ))
             })?;
             result[i] = (high << 4) | low;

@@ -84,10 +84,8 @@ impl ContentAddressableStorage for CasService {
         };
 
         // Map back to proto digests preserving the original order among missing ones.
-        let missing_hashes: std::collections::HashSet<String> = missing_infos
-            .iter()
-            .map(|d| d.hash_to_string())
-            .collect();
+        let missing_hashes: std::collections::HashSet<String> =
+            missing_infos.iter().map(|d| d.hash_to_string()).collect();
         let missing: Vec<Digest> = req
             .blob_digests
             .into_iter()
@@ -217,10 +215,8 @@ impl ContentAddressableStorage for CasService {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let digest_infos: Vec<DigestInfo> = ordered_digests
-            .iter()
-            .map(|(_, info, _)| *info)
-            .collect();
+        let digest_infos: Vec<DigestInfo> =
+            ordered_digests.iter().map(|(_, info, _)| *info).collect();
 
         let batch_results = match self.backend.batch_read(&digest_infos).await {
             Ok(results) => results,

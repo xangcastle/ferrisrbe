@@ -72,7 +72,10 @@ pub trait CasBackend: Send + Sync + 'static {
     ///
     /// Backends that support batched existence checks (e.g. gRPC CAS)
     /// should override this default to issue a single round-trip.
-    async fn find_missing(&self, digests: &[crate::types::DigestInfo]) -> CasResult<Vec<crate::types::DigestInfo>> {
+    async fn find_missing(
+        &self,
+        digests: &[crate::types::DigestInfo],
+    ) -> CasResult<Vec<crate::types::DigestInfo>> {
         let mut missing = Vec::new();
         for digest in digests {
             if !self.contains(digest).await? {
