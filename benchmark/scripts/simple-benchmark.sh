@@ -37,6 +37,10 @@ case "$TARGET" in
         CONTAINER="buildbuddy-server"
         PORT=9092
         ;;
+    nativelink)
+        CONTAINER="nativelink-server"
+        PORT=9092
+        ;;
     *)
         echo "Unknown target: $TARGET"
         exit 1

@@ -384,7 +384,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let backend = DiskBackend::new(temp_dir.path()).await.unwrap();
 
-        let digest = DigestInfo::new("nonexistent", 0);
+        let digest = DigestInfo::new(
+            "7945bc2d6e4fd0a0be5216460557bef483a80b6af0acbcdf06866f5c473b9367",
+            0,
+        )
+        .unwrap();
 
         assert!(!backend.contains(&digest).await.unwrap());
         assert!(backend.read(&digest).await.unwrap().is_none());
@@ -396,7 +400,11 @@ mod tests {
         let backend = DiskBackend::new(temp_dir.path()).await.unwrap();
 
         let data = b"test data";
-        let wrong_digest = DigestInfo::new("wronghash", data.len() as i64);
+        let wrong_digest = DigestInfo::new(
+            "c5df841b903cb4ca2f171b0ce1cc391001d3aa38d22c9c8288da31c232404a2e",
+            data.len() as i64,
+        )
+        .unwrap();
 
         let result = backend.write(&wrong_digest, Bytes::from_static(data)).await;
         assert!(matches!(result, Err(CasError::DigestMismatch { .. })));

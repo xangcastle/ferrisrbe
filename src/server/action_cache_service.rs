@@ -76,7 +76,8 @@ impl ActionCache for ActionCacheService {
             .action_digest
             .ok_or_else(|| Status::invalid_argument("Missing action_digest"))?;
 
-        let digest_info = DigestInfo::new(&action_digest.hash, action_digest.size_bytes);
+        let digest_info = DigestInfo::new(&action_digest.hash, action_digest.size_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
 
         info!("📡 ActionCache::GetActionResult digest={}", digest_info);
 
@@ -106,7 +107,8 @@ impl ActionCache for ActionCacheService {
             .action_result
             .ok_or_else(|| Status::invalid_argument("Missing action_result"))?;
 
-        let digest_info = DigestInfo::new(&action_digest.hash, action_digest.size_bytes);
+        let digest_info = DigestInfo::new(&action_digest.hash, action_digest.size_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
 
         info!("📡 ActionCache::UpdateActionResult digest={}", digest_info);
 

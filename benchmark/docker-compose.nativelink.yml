@@ -1,0 +1,86 @@
+# NativeLink - Benchmark Configuration
+# Reference: https://github.com/TraceMachina/nativelink
+#
+# NativeLink is a single Rust binary serving CAS, Action Cache and scheduler
+# in one process, so there is no separate bazel-remote/Redis sidecar like in
+# the FerrisRBE stack. The worker runs the same binary inside ubuntu:22.04
+# (injected by the worker-init container) so actions have a real shell and
+# userland to execute in.
+#
+# Note: the published images are amd64-only (same as the ferrisrbe images
+# built via `bazel run //oci:server_load_amd64`).
+version: "3.8"
+
+services:
+  # === NATIVELINK SERVER (CAS + AC + Scheduler) ===
+  nativelink-server:
+    image: ghcr.io/tracemachina/nativelink:v1.4.0
+    container_name: nativelink-server
+    ports:
+      - "9092:50051"     # REAPI gRPC (mapped to standard port)
+    command: ["/nativelink-config.json5"]
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - ./config/nativelink-server.json5:/nativelink-config.json5:ro
+      - nativelink-cas-data:/data
+    networks:
+      - benchmark-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # === WORKER INIT (copies the static binary into the shared volume) ===
+  nativelink-worker-init:
+    image: ghcr.io/tracemachina/nativelink-worker-init:v1.4.0
+    container_name: nativelink-worker-init
+    command: ["/shared/nativelink"]
+    restart: "no"
+    volumes:
+      - nativelink-shared:/shared
+    networks:
+      - benchmark-network
+
+  # === NATIVELINK WORKER ===
+  nativelink-worker:
+    image: ubuntu:22.04
+    container_name: nativelink-worker
+    entrypoint: ["/shared/nativelink"]
+    command: ["/worker.json5"]
+    environment:
+      - NATIVELINK_ENDPOINT=nativelink-server
+      - RUST_LOG=info
+    volumes:
+      - nativelink-shared:/shared:ro
+      - ./config/nativelink-worker.json5:/worker.json5:ro
+      - worker-workspace:/workspace
+    networks:
+      - benchmark-network
+    depends_on:
+      nativelink-worker-init:
+        condition: service_completed_successfully
+      nativelink-server:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
+
+volumes:
+  nativelink-cas-data:
+  nativelink-shared:
+  worker-workspace:
+
+networks:
+  benchmark-network:
+    driver: bridge

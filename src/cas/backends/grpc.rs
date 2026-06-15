@@ -143,6 +143,44 @@ impl CasBackend for GrpcCasBackend {
         }
     }
 
+    async fn find_missing(&self, digests: &[DigestInfo]) -> CasResult<Vec<DigestInfo>> {
+        trace!(
+            "GrpcCasBackend::find_missing() called for {} digests",
+            digests.len()
+        );
+
+        if digests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let request = crate::proto::build::bazel::remote::execution::v2::FindMissingBlobsRequest {
+            instance_name: self.instance_name.clone(),
+            blob_digests: digests.iter().map(|d| self.to_proto_digest(d)).collect(),
+            digest_function: 1,
+        };
+
+        let mut client = self.client.clone();
+        match client.find_missing_blobs(request).await {
+            Ok(response) => {
+                let missing = response
+                    .into_inner()
+                    .missing_blob_digests
+                    .into_iter()
+                    .map(|d| {
+                        DigestInfo::new(&d.hash, d.size_bytes)
+                            .map_err(|e| CasError::Storage(format!("Invalid digest: {}", e)))
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(missing)
+            }
+            Err(e) => {
+                warn!("Failed to find missing blobs: {}", e);
+                // Fallback: report all digests as missing so callers can retry/continue.
+                Ok(digests.to_vec())
+            }
+        }
+    }
+
     async fn read(&self, digest: &DigestInfo) -> CasResult<Option<Bytes>> {
         trace!(
             "GrpcCasBackend::read() called for digest: {} (size={})",
@@ -169,6 +207,59 @@ impl CasBackend for GrpcCasBackend {
             Err(e) => {
                 warn!("Failed to read blob {}: {}", digest.hash_to_string(), e);
                 Ok(None)
+            }
+        }
+    }
+
+    async fn batch_read(
+        &self,
+        digests: &[DigestInfo],
+    ) -> CasResult<Vec<(DigestInfo, Option<Bytes>)>> {
+        trace!(
+            "GrpcCasBackend::batch_read() called for {} digests",
+            digests.len()
+        );
+
+        if digests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let request = BatchReadBlobsRequest {
+            instance_name: self.instance_name.clone(),
+            digests: digests.iter().map(|d| self.to_proto_digest(d)).collect(),
+            acceptable_compressors: vec![],
+            digest_function: 1,
+        };
+
+        let mut client = self.client.clone();
+        match client.batch_read_blobs(request).await {
+            Ok(response) => {
+                let inner = response.into_inner();
+                let mut results = Vec::with_capacity(inner.responses.len());
+                for response in inner.responses {
+                    let digest = response
+                        .digest
+                        .map(|d| {
+                            DigestInfo::new(&d.hash, d.size_bytes)
+                                .map_err(|e| CasError::Storage(format!("Invalid digest: {}", e)))
+                        })
+                        .transpose()?
+                        .ok_or_else(|| {
+                            CasError::Storage("Missing digest in batch read response".to_string())
+                        })?;
+                    let status_code = response.status.as_ref().map(|s| s.code).unwrap_or(0);
+                    let data = if status_code == 0 {
+                        Some(response.data.into())
+                    } else {
+                        None
+                    };
+                    results.push((digest, data));
+                }
+                Ok(results)
+            }
+            Err(e) => {
+                warn!("Failed to batch read {} blobs: {}", digests.len(), e);
+                Err(CasError::Storage(format!("gRPC batch read failed: {}", e)))
             }
         }
     }
@@ -251,6 +342,73 @@ impl CasBackend for GrpcCasBackend {
         }
     }
 
+    async fn batch_write(
+        &self,
+        items: &[(DigestInfo, Bytes)],
+    ) -> CasResult<Vec<(DigestInfo, CasResult<()>)>> {
+        trace!(
+            "GrpcCasBackend::batch_write() called for {} blobs",
+            items.len()
+        );
+
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let request = BatchUpdateBlobsRequest {
+            instance_name: self.instance_name.clone(),
+            requests: items
+                .iter()
+                .map(|(digest, data)| crate::proto::build::bazel::remote::execution::v2::batch_update_blobs_request::Request {
+                    digest: Some(self.to_proto_digest(digest)),
+                    data: data.to_vec(),
+                    compressor: 0,
+                })
+                .collect(),
+            digest_function: 1,
+        };
+
+        let mut client = self.client.clone();
+        match client.batch_update_blobs(request).await {
+            Ok(response) => {
+                let inner = response.into_inner();
+                let mut results = Vec::with_capacity(inner.responses.len());
+                for response in inner.responses {
+                    let digest = response
+                        .digest
+                        .map(|d| {
+                            DigestInfo::new(&d.hash, d.size_bytes)
+                                .map_err(|e| CasError::Storage(format!("Invalid digest: {}", e)))
+                        })
+                        .transpose()?
+                        .ok_or_else(|| {
+                            CasError::Storage("Missing digest in batch write response".to_string())
+                        })?;
+                    let status_code = response.status.as_ref().map(|s| s.code).unwrap_or(0);
+                    let result = if status_code == 0 {
+                        Ok(())
+                    } else {
+                        let message = response
+                            .status
+                            .as_ref()
+                            .map(|s| s.message.clone())
+                            .unwrap_or_default();
+                        Err(CasError::Storage(format!(
+                            "CAS rejected blob: {} (code {})",
+                            message, status_code
+                        )))
+                    };
+                    results.push((digest, result));
+                }
+                Ok(results)
+            }
+            Err(e) => {
+                error!("Failed to batch write {} blobs: {}", items.len(), e);
+                Err(CasError::Storage(format!("gRPC batch write failed: {}", e)))
+            }
+        }
+    }
+
     async fn write_stream(
         &self,
         digest: &DigestInfo,
@@ -264,7 +422,7 @@ impl CasBackend for GrpcCasBackend {
             digest.size
         );
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<WriteRequest>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<WriteRequest>(64);
         let resource_name_clone = resource_name.clone();
 
         let stream_task = tokio::spawn(async move {

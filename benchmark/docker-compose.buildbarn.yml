@@ -1,17 +1,27 @@
 # Buildbarn - Benchmark Configuration
-# Reference: https://github.com/buildbarn/bb-deployments
+# Reference: https://github.com/buildbarn/bb-deployments (docker-compose)
+#
+# Topology: frontend (REAPI entrypoint) -> scheduler + storage; the worker
+# pulls from the scheduler and delegates command execution to a bb_runner
+# process inside an ubuntu:22.04 container, talking over a Unix socket in the
+# shared /worker volume. The runner binary is injected by bb-runner-installer
+# (same init-container pattern as the NativeLink stack).
+#
+# The runner advertises an EMPTY platform on purpose: the benchmark load tests
+# submit actions without exec_properties and buildbarn matches platforms
+# exactly.
 version: "3.8"
 
 services:
   # === BUILDBARN FRONTEND ===
   buildbarn-frontend:
-    image: ghcr.io/buildbarn/bb-storage:20250105T152056Z-a3f20b0
+    image: ghcr.io/buildbarn/bb-storage:20260609T094425Z-10acc76
     container_name: buildbarn-frontend
     ports:
       - "9092:8980"      # REAPI gRPC (mapped to standard port)
     volumes:
       - ./config/buildbarn-frontend.json:/config/frontend.json:ro
-    command: ["/bb/storage/frontend", "/config/frontend.json"]
+    command: ["/config/frontend.json"]
     networks:
       - benchmark-network
     depends_on:
@@ -26,38 +36,14 @@ services:
 
   # === BUILDBARN SCHEDULER ===
   buildbarn-scheduler:
-    image: ghcr.io/buildbarn/bb-scheduler:20250105T152056Z-a3f20b0
+    image: ghcr.io/buildbarn/bb-scheduler:20260609T094453Z-3afb892
     container_name: buildbarn-scheduler
-    ports:
-      - "9094:8982"      # Scheduler gRPC
     volumes:
       - ./config/buildbarn-scheduler.json:/config/scheduler.json:ro
-    command: ["/bb/scheduler", "/config/scheduler.json"]
+    command: ["/config/scheduler.json"]
     networks:
       - benchmark-network
     depends_on:
-      - buildbarn-storage
-      - buildbarn-redis
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 512M
-
-  # === BUILDBARN WORKER ===
-  buildbarn-worker:
-    image: ghcr.io/buildbarn/bb-worker:20250105T152056Z-a3f20b0
-    container_name: buildbarn-worker
-    privileged: true
-    volumes:
-      - ./config/buildbarn-worker.json:/config/worker.json:ro
-      - worker-workspace:/worker
-    command: ["/bb/worker", "/config/worker.json"]
-    networks:
-      - benchmark-network
-    depends_on:
-      - buildbarn-scheduler
       - buildbarn-storage
     deploy:
       resources:
@@ -66,16 +52,15 @@ services:
         reservations:
           memory: 512M
 
-  # === BUILDBARN STORAGE ===
+  # === BUILDBARN STORAGE (CAS + AC) ===
   buildbarn-storage:
-    image: ghcr.io/buildbarn/bb-storage:20250105T152056Z-a3f20b0
+    image: ghcr.io/buildbarn/bb-storage:20260609T094425Z-10acc76
     container_name: buildbarn-storage
-    ports:
-      - "9095:8981"      # Storage gRPC
     volumes:
       - ./config/buildbarn-storage.json:/config/storage.json:ro
-      - buildbarn-storage-data:/storage
-    command: ["/bb/storage/storage", "/config/storage.json"]
+      - buildbarn-storage-cas:/storage-cas
+      - buildbarn-storage-ac:/storage-ac
+    command: ["/config/storage.json"]
     networks:
       - benchmark-network
     deploy:
@@ -85,25 +70,77 @@ services:
         reservations:
           memory: 1G
 
-  # === REDIS FOR BUILDBARN ===
-  buildbarn-redis:
-    image: redis:7-alpine
-    container_name: buildbarn-redis
-    ports:
-      - "6381:6379"      # Different port to avoid conflict
+  # === RUNNER INSTALLER (copies bb_runner into the shared volume) ===
+  buildbarn-runner-installer:
+    image: ghcr.io/buildbarn/bb-runner-installer:20260609T094453Z-3afb892
+    container_name: buildbarn-runner-installer
+    restart: "no"
     volumes:
-      - buildbarn-redis-data:/data
+      - buildbarn-bb-bin:/bb
+
+  # === WORKER DIR INIT (bb-worker requires the build dir to pre-exist) ===
+  buildbarn-dirs-init:
+    image: busybox:1.36
+    container_name: buildbarn-dirs-init
+    command: ["mkdir", "-p", "/worker/build", "/worker/cache"]
+    restart: "no"
+    volumes:
+      - buildbarn-worker-dir:/worker
+
+  # === BUILDBARN WORKER ===
+  buildbarn-worker:
+    image: ghcr.io/buildbarn/bb-worker:20260609T094453Z-3afb892
+    container_name: buildbarn-worker
+    volumes:
+      - ./config/buildbarn-worker.json:/config/worker.json:ro
+      - buildbarn-worker-dir:/worker
+    command: ["/config/worker.json"]
     networks:
       - benchmark-network
+    depends_on:
+      buildbarn-dirs-init:
+        condition: service_completed_successfully
+      buildbarn-scheduler:
+        condition: service_started
+      buildbarn-storage:
+        condition: service_started
     deploy:
       resources:
         limits:
+          memory: 2G
+        reservations:
           memory: 512M
 
+  # === BUILDBARN RUNNER (command execution environment) ===
+  buildbarn-runner:
+    image: ubuntu:22.04
+    container_name: buildbarn-runner
+    # The installer image ships only bb_runner + the installed marker (no
+    # tini); docker's own init provides PID-1 reaping instead.
+    init: true
+    command: >
+      sh -c "while ! test -f /bb/installed; do sleep 1; done;
+      exec /bb/bb_runner /config/runner.json"
+    volumes:
+      - ./config/buildbarn-runner.json:/config/runner.json:ro
+      - buildbarn-bb-bin:/bb:ro
+      - buildbarn-worker-dir:/worker
+    networks:
+      - benchmark-network
+    depends_on:
+      - buildbarn-worker
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
+
 volumes:
-  buildbarn-storage-data:
-  buildbarn-redis-data:
-  worker-workspace:
+  buildbarn-storage-cas:
+  buildbarn-storage-ac:
+  buildbarn-bb-bin:
+  buildbarn-worker-dir:
 
 networks:
   benchmark-network:

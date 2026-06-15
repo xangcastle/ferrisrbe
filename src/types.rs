@@ -74,40 +74,53 @@ pub struct DigestInfo {
 }
 
 impl DigestInfo {
-    /// Create a new DigestInfo from a hex string and size
-    pub fn new(hash_str: &str, size: i64) -> Self {
-        let hash = Self::parse_sha256(hash_str);
-        Self { hash, size }
+    /// Create a new DigestInfo from a 64-character SHA256 hex string and size.
+    ///
+    /// Returns an error if the string is not exactly 64 hex characters.
+    pub fn new(hash_str: &str, size: i64) -> Result<Self> {
+        let hash = Self::parse_sha256(hash_str)?;
+        Ok(Self { hash, size })
     }
 
-    /// Parse a SHA256 hex string into [u8; 32]
-    fn parse_sha256(hash_str: &str) -> [u8; 32] {
-        let mut result = [0u8; 32];
+    /// Parse a SHA256 hex string into [u8; 32].
+    ///
+    /// Rejects strings that are not exactly 64 hex characters.
+    fn parse_sha256(hash_str: &str) -> Result<[u8; 32]> {
         let bytes = hash_str.as_bytes();
-
-        for i in 0..32 {
-            let high_idx = i * 2;
-            let low_idx = i * 2 + 1;
-
-            if high_idx < bytes.len() {
-                let high = Self::hex_char_to_nibble(bytes[high_idx]);
-                let low = if low_idx < bytes.len() {
-                    Self::hex_char_to_nibble(bytes[low_idx])
-                } else {
-                    0
-                };
-                result[i] = (high << 4) | low;
-            }
+        if bytes.len() != 64 {
+            return Err(RbeError::InvalidDigest(format!(
+                "expected 64 hex characters, got {}",
+                bytes.len()
+            )));
         }
-        result
+
+        let mut result = [0u8; 32];
+        for i in 0..32 {
+            let high = Self::hex_char_to_nibble(bytes[i * 2]).map_err(|_| {
+                RbeError::InvalidDigest(format!(
+                    "invalid hex character '{}' at position {}",
+                    bytes[i * 2] as char,
+                    i * 2
+                ))
+            })?;
+            let low = Self::hex_char_to_nibble(bytes[i * 2 + 1]).map_err(|_| {
+                RbeError::InvalidDigest(format!(
+                    "invalid hex character '{}' at position {}",
+                    bytes[i * 2 + 1] as char,
+                    i * 2 + 1
+                ))
+            })?;
+            result[i] = (high << 4) | low;
+        }
+        Ok(result)
     }
 
-    fn hex_char_to_nibble(c: u8) -> u8 {
+    fn hex_char_to_nibble(c: u8) -> std::result::Result<u8, ()> {
         match c {
-            b'0'..=b'9' => c - b'0',
-            b'a'..=b'f' => c - b'a' + 10,
-            b'A'..=b'F' => c - b'A' + 10,
-            _ => 0,
+            b'0'..=b'9' => Ok(c - b'0'),
+            b'a'..=b'f' => Ok(c - b'a' + 10),
+            b'A'..=b'F' => Ok(c - b'A' + 10),
+            _ => Err(()),
         }
     }
 
@@ -123,16 +136,10 @@ impl DigestInfo {
         }
     }
 
+    /// Generate a random RFC 4122 UUID as a 128-bit value.
     pub fn generate_uuid() -> u128 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        static INIT_INSTANT: OnceCell<Instant> = OnceCell::new();
-
-        let base = INIT_INSTANT.get_or_init(Instant::now).elapsed().as_nanos();
-        let counter = COUNTER.fetch_add(1, Ordering::Relaxed) as u128;
-
-        base ^ (counter << 64)
+        let uuid = uuid::Uuid::new_v4();
+        u128::from_be_bytes(*uuid.as_bytes())
     }
 
     /// Convert the hash to a 64-character hex string
@@ -173,6 +180,9 @@ pub enum RbeError {
     #[error("Digest not found: {0}")]
     DigestNotFound(DigestInfo),
 
+    #[error("Invalid digest string: {0}")]
+    InvalidDigest(String),
+
     #[error("CAS storage error: {0}")]
     CasError(String),
 
@@ -201,9 +211,23 @@ mod tests {
 
     #[test]
     fn test_digest_info_creation() {
-        let digest = DigestInfo::new("abc123", 1024);
+        let digest = DigestInfo::new(
+            "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae",
+            1024,
+        )
+        .unwrap();
         assert_eq!(digest.size, 1024);
         assert!(!digest.hash.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_digest_info_rejects_invalid_hex() {
+        assert!(DigestInfo::new("abc123", 1024).is_err());
+        assert!(DigestInfo::new(
+            "0000000000000000000000000000000000000000000000000000000061626331323g",
+            1024
+        )
+        .is_err());
     }
 
     #[test]

@@ -62,42 +62,55 @@ class StreamingSummary:
         print("\n" + "=" * 70)
         print(f"O(1) STREAMING TEST - {self.server}")
         print("=" * 70)
-        
+
         large_ops = self.get_large_ops()
         small_ops = self.get_small_ops()
-        
-        print(f"\n📊 LARGE FILE OPERATIONS (5-10GB):")
+        all_large = [r for r in self.results if 'large' in r.operation]
+        all_small = [r for r in self.results if 'small' in r.operation]
+
+        large_success_rate = len(large_ops) / len(all_large) if all_large else 0.0
+        small_success_rate = len(small_ops) / len(all_small) if all_small else 0.0
+
+        print(f"\n📊 LARGE FILE OPERATIONS ({len(all_large)} tested):")
+        print(f"  Success rate: {large_success_rate*100:.0f}%")
         if large_ops:
             sizes = [r.blob_size / (1024**3) for r in large_ops]  # GB
             durations = [r.duration_ms / 1000 for r in large_ops]  # seconds
             deltas = [r.memory_delta_mb for r in large_ops]
-            
-            print(f"  Files tested: {len(large_ops)}")
+
+            print(f"  Successful uploads: {len(large_ops)}")
             print(f"  Size range: {min(sizes):.1f}GB - {max(sizes):.1f}GB")
             print(f"  Upload time: {statistics.mean(durations):.1f}s avg")
             print(f"  Memory delta: {statistics.mean(deltas):.1f}MB avg")
             print(f"  Max memory spike: {max(deltas):.1f}MB")
-            
+
             if max(deltas) < 100:
                 print(f"  ✅ EXCELLENT: True O(1) streaming (constant memory)")
             elif max(deltas) < 500:
                 print(f"  ⚠️  WARNING: Some buffering detected")
             else:
                 print(f"  ❌ CRITICAL: Significant buffering (risk of OOM)")
-        
-        print(f"\n📊 SMALL FILE OPERATIONS (1KB):")
+        else:
+            print(f"  ❌ No large-file uploads succeeded")
+
+        print(f"\n📊 SMALL FILE OPERATIONS ({len(all_small)} tested):")
+        print(f"  Success rate: {small_success_rate*100:.0f}%")
         if small_ops:
             durations = [r.duration_ms for r in small_ops]
-            print(f"  Files tested: {len(small_ops)}")
+            print(f"  Successful uploads: {len(small_ops)}")
             print(f"  Avg latency: {statistics.mean(durations):.1f}ms")
             print(f"  P99 latency: {self._percentile(durations, 99):.1f}ms")
-        
-        print(f"\n🏆 O(1) STREAMING VERDICT:")
-        if large_ops and max(r.memory_delta_mb for r in large_ops) < 100:
-            print(f"  ✅ PASS: Memory usage independent of blob size")
         else:
-            print(f"  ❌ FAIL: Memory scales with blob size (O(n) behavior)")
-        
+            print(f"  ❌ No small-file uploads succeeded")
+
+        print(f"\n🏆 O(1) STREAMING VERDICT:")
+        if large_ops and large_success_rate == 1.0 and max(r.memory_delta_mb for r in large_ops) < 100:
+            print(f"  ✅ PASS: Memory usage independent of blob size")
+        elif large_ops and large_success_rate == 1.0:
+            print(f"  ⚠️  PARTIAL: Uploads succeeded but memory spiked >100MB")
+        else:
+            print(f"  ❌ FAIL: Large-file streaming did not succeed or is not O(1)")
+
         print("=" * 70)
     
     @staticmethod
@@ -156,7 +169,8 @@ def upload_via_bytestream(
     bytestream_stub,
     file_path: str,
     file_hash: str,
-    file_size: int
+    file_size: int,
+    metadata: Optional[list] = None
 ) -> Tuple[float, bool, str]:
     """Upload file via ByteStream API"""
     start = time.perf_counter()
@@ -166,27 +180,30 @@ def upload_via_bytestream(
         resource_name = f"uploads/{int(time.time())}/blobs/{file_hash}/{file_size}"
         
         # Stream chunks
-        chunk_size = 4 * 1024 * 1024  # 4MB chunks
+        chunk_size = 2 * 1024 * 1024  # 2MB chunks (stay under bazel-remote 4MB gRPC limit)
         
+        file_size = os.path.getsize(file_path)
+
         def generate_chunks():
             with open(file_path, 'rb') as f:
                 offset = 0
-                while True:
-                    chunk = f.read(chunk_size)
+                while offset < file_size:
+                    to_read = min(chunk_size, file_size - offset)
+                    chunk = f.read(to_read)
                     if not chunk:
                         break
                     yield bytestream_pb2.WriteRequest(
                         resource_name=resource_name if offset == 0 else "",
                         data=chunk,
-                        write_offset=offset
+                        write_offset=offset,
+                        finish_write=(offset + len(chunk) >= file_size)
                     )
                     offset += len(chunk)
         
-        responses = bytestream_stub.Write(generate_chunks())
-        # Consume responses
-        for response in responses:
-            pass
-        
+        response = bytestream_stub.Write(generate_chunks(), metadata=metadata or [])
+        # StreamUnary: single WriteResponse returned
+        _ = response.committed_size
+
         duration_ms = (time.perf_counter() - start) * 1000
         return duration_ms, True, ""
     
@@ -198,7 +215,8 @@ def upload_via_bytestream(
 def download_via_bytestream(
     bytestream_stub,
     file_hash: str,
-    file_size: int
+    file_size: int,
+    metadata: Optional[list] = None
 ) -> Tuple[float, bool, str]:
     """Download file via ByteStream API"""
     start = time.perf_counter()
@@ -211,7 +229,7 @@ def download_via_bytestream(
         
         # Stream read (data discarded to measure throughput)
         total_read = 0
-        for response in bytestream_stub.Read(request):
+        for response in bytestream_stub.Read(request, metadata=metadata or []):
             total_read += len(response.data)
         
         duration_ms = (time.perf_counter() - start) * 1000
@@ -227,13 +245,15 @@ def run_o1_streaming_test(
     large_sizes_gb: List[int],
     small_count: int,
     container_name: str,
-    concurrent: int = 3
+    concurrent: int = 3,
+    api_key: Optional[str] = None
 ) -> StreamingSummary:
     """Run O(1) streaming test"""
     
     print(f"Connecting to {server}...")
     channel = grpc.insecure_channel(server)
     bytestream_stub = bytestream_pb2_grpc.ByteStreamStub(channel)
+    grpc_metadata = [('x-buildbuddy-api-key', api_key)] if api_key else None
     
     summary = StreamingSummary(server=server)
     
@@ -255,7 +275,7 @@ def run_o1_streaming_test(
     for path, file_hash, size in large_files:
         mem_before = get_container_memory(container_name)
         duration, success, error = upload_via_bytestream(
-            bytestream_stub, path, file_hash, size
+            bytestream_stub, path, file_hash, size, grpc_metadata
         )
         mem_after = get_container_memory(container_name)
         
@@ -296,7 +316,8 @@ def run_o1_streaming_test(
                 bytestream_stub,
                 path,
                 file_hash,
-                small_size
+                small_size,
+                grpc_metadata
             )
             futures[future] = (path, i)
         
@@ -337,6 +358,7 @@ def main():
                        help='Container name to monitor')
     parser.add_argument('--concurrent', type=int, default=10,
                        help='Concurrent small uploads')
+    parser.add_argument('--api-key', default=None, help='gRPC API key (x-buildbuddy-api-key header)')
     parser.add_argument('--output', help='Output JSON file for results')
     
     args = parser.parse_args()
@@ -352,7 +374,8 @@ def main():
         large_sizes_gb=args.large_sizes,
         small_count=args.small_count,
         container_name=args.container,
-        concurrent=args.concurrent
+        concurrent=args.concurrent,
+        api_key=args.api_key
     )
     
     # Print summary
@@ -363,19 +386,28 @@ def main():
         import json
         result_dict = {
             'server': summary.server,
+            'container': args.container,
+            'large_sizes_gb': args.large_sizes,
+            'small_count': args.small_count,
             'large_ops': [
                 {
                     'size_gb': r.blob_size / (1024**3),
                     'duration_ms': r.duration_ms,
-                    'memory_delta_mb': r.memory_delta_mb
+                    'memory_before_mb': r.memory_before_mb,
+                    'memory_after_mb': r.memory_after_mb,
+                    'memory_delta_mb': r.memory_delta_mb,
+                    'success': r.success,
+                    'error': r.error
                 }
-                for r in summary.get_large_ops()
+                for r in summary.results if 'large' in r.operation
             ],
             'small_ops': [
                 {
-                    'duration_ms': r.duration_ms
+                    'duration_ms': r.duration_ms,
+                    'success': r.success,
+                    'error': r.error
                 }
-                for r in summary.get_small_ops()
+                for r in summary.results if 'small' in r.operation
             ]
         }
         with open(args.output, 'w') as f:
