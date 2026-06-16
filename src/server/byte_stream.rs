@@ -13,6 +13,7 @@ use crate::types::DigestInfo;
 use bytes::Bytes;
 use futures::StreamExt;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// ByteStream Service
 ///
@@ -39,7 +40,7 @@ const MAX_CHUNK_SIZE: usize = 64 * 1024;
 /// Channel buffer size for backpressure
 /// Larger values = more memory usage but better throughput
 /// Smaller values = less memory but more context switches
-const CHANNEL_BUFFER_SIZE: usize = 4;
+const CHANNEL_BUFFER_SIZE: usize = 64;
 
 impl ByteStreamService {
     pub fn new(backend: Arc<dyn CasBackend>) -> Self {
@@ -93,6 +94,7 @@ impl ByteStream for ByteStreamService {
         request: Request<ReadRequest>,
     ) -> Result<Response<ReceiverStream<Result<ReadResponse, Status>>>, Status> {
         let req = request.into_inner();
+        let start = Instant::now();
         info!(
             "📡 ByteStream::Read resource={} offset={} limit={}",
             req.resource_name, req.read_offset, req.read_limit
@@ -102,7 +104,8 @@ impl ByteStream for ByteStreamService {
             .parse_resource_name(&req.resource_name)
             .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
 
-        let digest_info = DigestInfo::new(&hash, _size);
+        let digest_info = DigestInfo::new(&hash, _size)
+            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
         let backend = self.backend.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(10);
 
@@ -146,6 +149,12 @@ impl ByteStream for ByteStreamService {
                     let _ = tx.send(Err(Self::to_status(e))).await;
                 }
             }
+
+            info!(
+                "📡 ByteStream::Read completed resource={} elapsed_ms={}",
+                req.resource_name,
+                start.elapsed().as_millis()
+            );
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
@@ -155,6 +164,7 @@ impl ByteStream for ByteStreamService {
         &self,
         request: Request<Streaming<WriteRequest>>,
     ) -> Result<Response<WriteResponse>, Status> {
+        let start = Instant::now();
         let mut stream = request.into_inner();
 
         let first_chunk = match stream.message().await {
@@ -172,7 +182,8 @@ impl ByteStream for ByteStreamService {
             .parse_resource_name(&resource_name)
             .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
 
-        let digest_info = DigestInfo::new(&hash, expected_size);
+        let digest_info = DigestInfo::new(&hash, expected_size)
+            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
 
         info!(
             "📡 ByteStream::Write started resource={} size={}",
@@ -236,8 +247,10 @@ impl ByteStream for ByteStreamService {
         match write_result {
             Ok(()) => {
                 info!(
-                    "✅ ByteStream::Write completed resource={} bytes_received={}",
-                    resource_name, total_received
+                    "✅ ByteStream::Write completed resource={} bytes_received={} elapsed_ms={}",
+                    resource_name,
+                    total_received,
+                    start.elapsed().as_millis()
                 );
                 Ok(Response::new(WriteResponse {
                     committed_size: total_received,
@@ -245,8 +258,10 @@ impl ByteStream for ByteStreamService {
             }
             Err(e) => {
                 warn!(
-                    "❌ ByteStream::Write failed resource={} error={}",
-                    resource_name, e
+                    "❌ ByteStream::Write failed resource={} error={} elapsed_ms={}",
+                    resource_name,
+                    e,
+                    start.elapsed().as_millis()
                 );
                 Err(Self::to_status(e))
             }
@@ -262,7 +277,8 @@ impl ByteStream for ByteStreamService {
             .parse_resource_name(&req.resource_name)
             .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
 
-        let digest_info = DigestInfo::new(&hash, size);
+        let digest_info = DigestInfo::new(&hash, size)
+            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
 
         let committed_size = match self.backend.contains(&digest_info).await {
             Ok(true) => size,

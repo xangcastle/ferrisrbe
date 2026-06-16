@@ -121,11 +121,11 @@ use_repo(crate, "crates")
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
 # Imagen base para el servidor RBE (Debian Bookworm Slim)
-# Usamos tag en lugar de digest para evitar problemas de compatibilidad
+# Pinned by manifest digest to ensure reproducible builds.
 oci.pull(
     name = "debian_bookworm_slim",
     image = "docker.io/library/debian",
-    tag = "bookworm-slim",
+    digest = "sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf87857c4b8188404716",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",

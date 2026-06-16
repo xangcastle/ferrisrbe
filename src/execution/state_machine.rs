@@ -208,6 +208,13 @@ impl ExecutionStateMachine {
         let mut history = self.transition_history.write().await;
         history.push((new_state, std::time::Instant::now()));
 
+        // Cap history to avoid unbounded memory growth on pathological loops.
+        const MAX_HISTORY_LEN: usize = 100;
+        if history.len() > MAX_HISTORY_LEN {
+            let excess = history.len() - MAX_HISTORY_LEN;
+            history.drain(0..excess);
+        }
+
         Ok(())
     }
 
@@ -388,7 +395,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_state_machine_transitions() {
-        let digest = DigestInfo::new("test", 1024);
+        let digest = DigestInfo::new(
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            1024,
+        )
+        .unwrap();
         let machine = ExecutionStateMachine::new(OperationId::generate(), digest);
 
         assert_eq!(machine.current_state().await, ExecutionStage::CacheCheck);
@@ -402,7 +413,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_terminal_states() {
-        let digest = DigestInfo::new("test", 1024);
+        let digest = DigestInfo::new(
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            1024,
+        )
+        .unwrap();
         let machine = ExecutionStateMachine::new(OperationId::generate(), digest);
 
         machine.transition_to(ExecutionStage::Queued).await.unwrap();

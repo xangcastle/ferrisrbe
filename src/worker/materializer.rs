@@ -634,7 +634,8 @@ fn digest_info_from_proto(
         digest.hash,
         digest.size_bytes
     );
-    Ok(DigestInfo::new(&digest.hash, digest.size_bytes))
+    DigestInfo::new(&digest.hash, digest.size_bytes)
+        .map_err(|e| CasError::InvalidDigest(format!("Invalid digest '{}': {}", digest.hash, e)))
 }
 
 /// Helper trait to decode protobuf messages
@@ -672,10 +673,14 @@ mod tests {
             config,
         );
 
-        let digest = DigestInfo::new("aabbccdd1122", 100);
+        let digest = DigestInfo::new(
+            "b33e1274d4cc53f47e12d8d8a441dc69af409faa83a1db62be1011f55d602769",
+            100,
+        )
+        .unwrap();
         let path = materializer.cas_cache_path(&digest);
 
-        assert!(path.to_string_lossy().contains("aa/bb/aabbccdd1122"));
+        assert!(path.to_string_lossy().contains("b3/3e/b33e1274d4cc"));
     }
 
     struct MockCasBackend;

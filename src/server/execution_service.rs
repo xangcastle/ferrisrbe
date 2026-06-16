@@ -69,11 +69,13 @@ impl ExecutionService {
         req: ExecuteRequest,
         operation_id: crate::execution::state_machine::OperationId,
     ) -> Result<ExecutableAction, Status> {
-        let action_digest = req
-            .action_digest
-            .clone()
-            .map(|d| DigestInfo::new(&d.hash, d.size_bytes))
-            .unwrap_or_else(|| DigestInfo::new("unknown", 0));
+        let action_digest = match req.action_digest.clone() {
+            Some(d) => DigestInfo::new(&d.hash, d.size_bytes)
+                .map_err(|e| Status::invalid_argument(format!("Invalid action_digest: {}", e)))?,
+            None => {
+                return Err(Status::invalid_argument("Missing action_digest"));
+            }
+        };
 
         let action = match self.fetch_action(&action_digest).await {
             Ok(Some(action)) => action,
@@ -96,7 +98,8 @@ impl ExecutionService {
         let command_digest = action
             .command_digest
             .ok_or_else(|| Status::invalid_argument("Action missing command_digest"))?;
-        let command_digest_info = DigestInfo::new(&command_digest.hash, command_digest.size_bytes);
+        let command_digest_info = DigestInfo::new(&command_digest.hash, command_digest.size_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid command_digest: {}", e)))?;
 
         let command = match self.fetch_command(&command_digest_info).await {
             Ok(Some(cmd)) => cmd,
@@ -118,7 +121,9 @@ impl ExecutionService {
 
         let input_root_digest = action
             .input_root_digest
-            .map(|d| DigestInfo::new(&d.hash, d.size_bytes));
+            .map(|d| DigestInfo::new(&d.hash, d.size_bytes))
+            .transpose()
+            .map_err(|e| Status::invalid_argument(format!("Invalid input_root_digest: {}", e)))?;
 
         let (output_files, output_directories) = if !command.output_paths.is_empty() {
             (command.output_paths.clone(), vec![])
@@ -309,7 +314,8 @@ impl Execution for ExecutionService {
             .clone()
             .ok_or_else(|| Status::invalid_argument("Missing action_digest"))?;
 
-        let digest_info = DigestInfo::new(&action_digest.hash, action_digest.size_bytes);
+        let digest_info = DigestInfo::new(&action_digest.hash, action_digest.size_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid action_digest: {}", e)))?;
 
         info!("Execution::Execute digest={}", digest_info);
 
@@ -435,8 +441,9 @@ impl Execution for ExecutionService {
                 let output_handler = self.output_handler.clone();
 
                 tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_millis(500));
                     loop {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        interval.tick().await;
                         let done = sm_clone.is_terminal().await;
 
                         if done {
@@ -539,7 +546,9 @@ impl Execution for ExecutionService {
             let tx_clone = tx.clone();
 
             tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(500));
                 loop {
+                    interval.tick().await;
                     let done = sm.is_terminal().await;
 
                     if done {
@@ -629,7 +638,6 @@ impl Execution for ExecutionService {
                     if tx_clone.send(Ok(op)).await.is_err() {
                         break;
                     }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             });
         } else {

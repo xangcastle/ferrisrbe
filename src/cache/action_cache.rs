@@ -435,7 +435,11 @@ mod tests {
     #[test]
     fn test_l1_cache_basic() {
         let cache = L1ActionCache::new(100, Duration::from_secs(60));
-        let digest = DigestInfo::new("test123", 1024);
+        let digest = DigestInfo::new(
+            "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae",
+            1024,
+        )
+        .unwrap();
         let result = ActionResult {
             digest,
             exit_code: 0,
@@ -466,7 +470,7 @@ mod tests {
         let cache = L1ActionCache::new(2, Duration::from_secs(60));
 
         for i in 0..5 {
-            let digest = DigestInfo::new(&format!("test{}", i), 1024);
+            let digest = DigestInfo::new(&format!("{:064x}", i), 1024).unwrap();
             let result = ActionResult {
                 digest,
                 exit_code: i,

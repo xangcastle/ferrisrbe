@@ -358,7 +358,9 @@ impl OutputUploader {
                     }
 
                     let hash = hex::encode(hasher.finalize());
-                    let digest = DigestInfo::new(&hash, size);
+                    let digest = DigestInfo::new(&hash, size).map_err(|e| {
+                        CasError::InvalidDigest(format!("Invalid file digest: {}", e))
+                    })?;
 
                     if !self.cas_backend.contains(&digest).await? {
                         let max_batch = max_batch_size();
@@ -523,7 +525,8 @@ impl OutputUploader {
         }
 
         let hash = hex::encode(hasher.finalize());
-        let digest = DigestInfo::new(&hash, size);
+        let digest = DigestInfo::new(&hash, size)
+            .map_err(|e| CasError::InvalidDigest(format!("Invalid file digest: {}", e)))?;
 
         debug!(
             "File {}: size={}, digest={}",

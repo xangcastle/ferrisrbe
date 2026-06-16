@@ -353,7 +353,11 @@ mod tests {
     #[test]
     fn test_scheduler_enqueue_dequeue() {
         let scheduler = MultiLevelScheduler::new();
-        let digest = DigestInfo::new("test", 1024);
+        let digest = DigestInfo::new(
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            1024,
+        )
+        .unwrap();
 
         let action = ExecutableAction {
             operation_id: OperationId::generate(),
@@ -383,7 +387,11 @@ mod tests {
     #[test]
     fn test_action_merging() {
         let scheduler = MultiLevelScheduler::new();
-        let digest = DigestInfo::new("same_action", 2048);
+        let digest = DigestInfo::new(
+            "54093d159648c4e0858b989afc5a8333aedf8e96e9c58d1f7b1d0f0b6147f4c1",
+            2048,
+        )
+        .unwrap();
 
         let action1 = ExecutableAction {
             operation_id: OperationId::generate(),
@@ -427,8 +435,16 @@ mod tests {
     fn test_priority_from_action_size() {
         let small_action = ExecutableAction {
             operation_id: OperationId::generate(),
-            action_digest: DigestInfo::new("small", 1024),
-            input_digests: vec![DigestInfo::new("input", 512)],
+            action_digest: DigestInfo::new(
+                "81db8ebbbbc69c6c6ad4a6aa92b76e0c08af547da236b9e2c9dbe1d8285a8130",
+                1024,
+            )
+            .unwrap(),
+            input_digests: vec![DigestInfo::new(
+                "c96c6d5be8d08a12e7b5cdc1b207fa6b2430974c86803d8891675e76fd992c20",
+                512,
+            )
+            .unwrap()],
             command: vec![],
             timeout: Duration::from_secs(60),
             priority: QueuePriority::Fast,
@@ -440,8 +456,16 @@ mod tests {
 
         let large_action = ExecutableAction {
             operation_id: OperationId::generate(),
-            action_digest: DigestInfo::new("large", 1024),
-            input_digests: vec![DigestInfo::new("input", 200 * 1024 * 1024)],
+            action_digest: DigestInfo::new(
+                "d35c416a85b807e9b5384915d6ebb4a9f7352713efd89857b45a242f473728a9",
+                1024,
+            )
+            .unwrap(),
+            input_digests: vec![DigestInfo::new(
+                "c96c6d5be8d08a12e7b5cdc1b207fa6b2430974c86803d8891675e76fd992c20",
+                200 * 1024 * 1024,
+            )
+            .unwrap()],
             command: vec![],
             timeout: Duration::from_secs(60),
             output_files: vec![],

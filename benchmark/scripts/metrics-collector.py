@@ -161,7 +161,9 @@ class DockerMetricsCollector:
             'TIB': 1024 * 1024,
         }
         
-        for unit, multiplier in units.items():
+        # Longest suffix first: every MiB/GiB/KiB value also ends with "B",
+        # so insertion-order matching would hit 'B' and fail the float parse.
+        for unit, multiplier in sorted(units.items(), key=lambda kv: -len(kv[0])):
             if size_str.endswith(unit):
                 try:
                     value = float(size_str[:-len(unit)])
