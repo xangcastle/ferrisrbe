@@ -1,16 +1,6 @@
 name: Performance Benchmarks
 
 on:
-  pull_request_target:
-    branches: [ main, master ]
-    types: [ opened, synchronize, reopened ]
-    paths:
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'benchmark/**'
-      - '.github/workflows/benchmark.yml'
-      - 'oci/**'
   pull_request:
     branches: [ main, master ]
     paths:
@@ -99,7 +89,7 @@ jobs:
     name: Benchmark PR
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request'
     permissions:
       contents: read
       issues: write
@@ -122,12 +112,8 @@ jobs:
       BENCHMARK_SERVICES: 1
 
     steps:
-      # SECURITY NOTE: pull_request_target runs with base-repo permissions; checkout
-      # the PR head explicitly so we benchmark the actual PR code.
       - name: Checkout PR
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Download server image artifact
         uses: actions/download-artifact@v4
@@ -257,7 +243,7 @@ jobs:
               regressionSection,
               '',
               '---',
-              `_Commit: \`${{ github.event.pull_request.head.sha }}\` · [Full logs and artifacts](${runUrl})_`,
+              `_Commit: \`${{ github.sha }}\` · [Full logs and artifacts](${runUrl})_`,
             ].join('\n');
 
             const issueNumber = context.issue.number || context.payload.pull_request?.number;
