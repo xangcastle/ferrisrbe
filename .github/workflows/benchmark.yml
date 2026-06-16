@@ -93,20 +93,18 @@ jobs:
           path: /tmp/docker-images/ferrisrbe-worker.tar.gz
           retention-days: 1
 
-  # Run lightweight benchmarks on PR using containers
+  # Run full benchmarks on PR: benchmark suite + comparison vs official release + regression check
+  # Posts a single unified comment (upserted on every push).
   benchmark-pr:
-    name: Benchmark PR (Container Mode)
+    name: Benchmark PR
     runs-on: ubuntu-latest
     needs: build
-    # Run on both pull_request (internal PRs) and pull_request_target (fork PRs)
-    # Skip if manually triggering full benchmarks
-    if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.inputs.benchmark_all != 'true'
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
     permissions:
       contents: read
       issues: write
       pull-requests: write
-    
-    # Use GitHub Actions services for bazel-remote (CAS)
+
     services:
       bazel-remote:
         image: buchgr/bazel-remote-cache:latest
@@ -118,138 +116,176 @@ jobs:
           BAZEL_REMOTE_HTTP_PORT: 8080
           BAZEL_REMOTE_DIR: /data
           BAZEL_REMOTE_MAX_SIZE: 1
-    
+
     env:
-      # Point server to the service
       CAS_ENDPOINT: localhost:9094
-      # Disable standalone mode since we're using services
       BENCHMARK_SERVICES: 1
-    
+
     steps:
-      # SECURITY NOTE: When using pull_request_target, checkout the PR code explicitly
-      # This is safe here because we only run benchmarks, not build/deploy
+      # SECURITY NOTE: pull_request_target runs with base-repo permissions; checkout
+      # the PR head explicitly so we benchmark the actual PR code.
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      
+
       - name: Download server image artifact
         uses: actions/download-artifact@v4
         with:
           name: ferrisrbe-image
           path: /tmp/docker-images/
-      
+
       - name: Download worker image artifact
         uses: actions/download-artifact@v4
         with:
           name: ferrisrbe-worker-image
           path: /tmp/docker-images/
-      
+
       - name: Load Docker images
         run: |
           gunzip -c /tmp/docker-images/ferrisrbe-server.tar.gz | docker load
           gunzip -c /tmp/docker-images/ferrisrbe-worker.tar.gz | docker load
           docker images | grep ferrisrbe || true
-      
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pip bc netcat-openbsd
           pip3 install grpcio grpcio-tools
-      
-      - name: Run lightweight benchmark suite (container)
+
+      - name: Run full benchmark suite
         id: benchmark
         run: |
           cd benchmark
-          ./scripts/benchmark-ci.sh light
+          ./scripts/benchmark-ci.sh full
         continue-on-error: true
-        
+
+      - name: Compare PR vs official release
+        id: compare
+        run: |
+          cd benchmark
+          ./scripts/compare-branches.sh ferrisrbe/server:latest
+        continue-on-error: true
+
+      - name: Check regression thresholds
+        id: regression
+        run: |
+          python3 benchmark/scripts/check-regression.py benchmark/results/benchmark_data.json
+        continue-on-error: true
+
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results-pr
           path: benchmark/results/
           retention-days: 30
-      
-      - name: Create benchmark report
+
+      - name: Write step summary
         if: always()
         run: |
-          echo "## 📊 Container Benchmark Report" >> $GITHUB_STEP_SUMMARY
           if [ -f benchmark/results/benchmark_summary.md ]; then
             cat benchmark/results/benchmark_summary.md >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Benchmark failed to complete. Check logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "❌ Benchmark failed to complete." >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Comment PR with results
+      - name: Post unified PR comment
         uses: actions/github-script@v7
-        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        if: always()
         continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = require('path');
-            
-            // Read summary
-            let body = '## 🚀 Container Performance Benchmark Results\n\n';
+            const MARKER = '<!-- ferrisrbe-benchmark-report -->';
+
+            // --- Benchmark results section ---
+            let benchSection = '';
             const summaryPath = 'benchmark/results/benchmark_summary.md';
-            
             if (fs.existsSync(summaryPath)) {
-              const summary = fs.readFileSync(summaryPath, 'utf8');
-              body += summary;
+              benchSection = fs.readFileSync(summaryPath, 'utf8').trim();
             } else {
-              body += '❌ Benchmark failed to complete. Check logs for details.';
+              benchSection = '❌ Benchmark suite did not produce a summary. Check the workflow logs.';
             }
-            
-            // Add link to workflow run
-            body += `\n\n---\n`;
-            body += `📊 [View full details and artifacts](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
-            body += `🕐 Benchmark run: ${new Date().toISOString()}\n`;
-            body += `\n> 💡 **Note:** Benchmarks run using Docker containers for realistic testing\n`;
-            
-            // Get the PR number from the appropriate event payload
-            const issueNumber = context.issue.number || context.payload.pull_request.number;
-            
-            if (!issueNumber) {
-              console.log('No PR number found, skipping comment');
-              return;
+
+            // --- Comparison section ---
+            let compareSection = '';
+            const comparisonPath = 'benchmark/results/comparison.md';
+            if (fs.existsSync(comparisonPath)) {
+              // Strip a leading H2 if comparison.md already starts with one to avoid duplication
+              compareSection = fs.readFileSync(comparisonPath, 'utf8')
+                .trim()
+                .replace(/^##\s+.*\n/, '');
+            } else {
+              compareSection = '_Comparison against official release not available._';
             }
-            
-            try {
-              // Find existing comment
-              const { data: comments } = await github.rest.issues.listComments({
+
+            // --- Regression section ---
+            const regressionFailed = '${{ steps.regression.outcome }}' === 'failure';
+            let regressionSection = '';
+            const failedPath = 'benchmark/results/failed_metrics.json';
+            if (regressionFailed && fs.existsSync(failedPath)) {
+              const failed = JSON.parse(fs.readFileSync(failedPath, 'utf8'));
+              regressionSection += '> ⚠️ **Regression detected** — the following metrics exceeded their thresholds:\n\n';
+              regressionSection += '| Metric | Actual | Threshold | Unit |\n';
+              regressionSection += '|--------|--------|-----------|------|\n';
+              for (const [metric, info] of Object.entries(failed)) {
+                regressionSection += `| **${metric}** | ${info.value} | ${info.threshold} | ${info.unit} |\n`;
+              }
+            } else if (regressionFailed) {
+              regressionSection = '> ⚠️ **Regression check failed** — see workflow logs for details.';
+            } else {
+              regressionSection = '> ✅ All metrics within acceptable thresholds.';
+            }
+
+            // --- Assemble single comment ---
+            const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
+            const body = [
+              MARKER,
+              '## 📊 FerrisRBE Benchmark Report',
+              '',
+              benchSection,
+              '',
+              '---',
+              '### Comparison vs Official Release (`xangcastle/ferris-server:latest`)',
+              '',
+              compareSection,
+              '',
+              '---',
+              '### Regression Check',
+              '',
+              regressionSection,
+              '',
+              '---',
+              `_Commit: \`${{ github.event.pull_request.head.sha }}\` · [Full logs and artifacts](${runUrl})_`,
+            ].join('\n');
+
+            const issueNumber = context.issue.number || context.payload.pull_request?.number;
+            if (!issueNumber) { console.log('No PR number, skipping'); return; }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+
+            const existing = comments.find(c => c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issueNumber
+                comment_id: existing.id,
+                body,
               });
-              
-              const benchmarkComment = comments.find(comment => 
-                comment.body.includes('Container Performance Benchmark Results')
-              );
-              
-              if (benchmarkComment) {
-                // Update existing comment
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: benchmarkComment.id,
-                  body: body
-                });
-                console.log('Updated existing comment');
-              } else {
-                // Create new comment
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  body: body
-                });
-                console.log('Created new comment');
-              }
-            } catch (error) {
-              console.log('Could not post comment (permissions issue):', error.message);
-              console.log('Results are available in the workflow summary and artifacts.');
+              console.log('Updated existing benchmark comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+              });
+              console.log('Created benchmark comment');
             }
 
   # Run full benchmarks on main branch or manual trigger
@@ -323,249 +359,3 @@ jobs:
           path: benchmark/results/
           retention-days: 90
 
-  # Compare PR against official Docker Hub release (xangcastle/ferris-server:latest)
-  # This is much faster than compiling main (~30s vs ~5-10min) and tests the actual
-  # release artifact that users will run
-  benchmark-compare:
-    name: Compare Against Official Release
-    runs-on: ubuntu-latest
-    needs: [build, benchmark-pr]
-    if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.inputs.benchmark_all != 'true'
-    permissions:
-      contents: read
-      pull-requests: write
-    
-    # Use GitHub Actions services for bazel-remote (CAS)
-    services:
-      bazel-remote:
-        image: buchgr/bazel-remote-cache:latest
-        ports:
-          - 9094:9094
-          - 8080:8080
-        env:
-          BAZEL_REMOTE_GRPC_PORT: 9094
-          BAZEL_REMOTE_HTTP_PORT: 8080
-          BAZEL_REMOTE_DIR: /data
-          BAZEL_REMOTE_MAX_SIZE: 1
-    
-    env:
-      CAS_ENDPOINT: localhost:9094
-      BENCHMARK_SERVICES: 1
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Download PR image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ferrisrbe-image
-          path: /tmp/docker-images/
-      
-      - name: Load PR Docker image
-        run: |
-          gunzip -c /tmp/docker-images/ferrisrbe-server.tar.gz | docker load
-          docker images | grep ferrisrbe || true
-      
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          pip install grpcio grpcio-tools
-          sudo apt-get update
-          sudo apt-get install -y bc netcat-openbsd
-      
-      - name: Run comparison benchmark (PR vs Official)
-        id: compare
-        run: |
-          cd benchmark
-          ./scripts/compare-branches.sh ferrisrbe/server:latest
-      
-      - name: Comment PR with comparison
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const comparisonPath = 'benchmark/results/comparison.md';
-            
-            if (!fs.existsSync(comparisonPath)) {
-              console.log('No comparison file found');
-              return;
-            }
-            
-            const comparison = fs.readFileSync(comparisonPath, 'utf8');
-            
-            // Find existing comparison comment
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            
-            const comparisonComment = comments.find(comment => 
-              comment.body.includes('Performance Comparison: PR vs Official Release')
-            );
-            
-            const body = `## 📊 Performance Comparison: PR vs Official Release\n\n${comparison}`;
-            
-            if (comparisonComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: comparisonComment.id,
-                body: body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: body
-              });
-            }
-
-  # Performance regression check
-  regression-check:
-    name: Check for Regressions
-    runs-on: ubuntu-latest
-    needs: benchmark-pr
-    if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.inputs.benchmark_all != 'true'
-    permissions:
-      contents: read
-      pull-requests: write
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Download benchmark results
-        uses: actions/download-artifact@v4
-        with:
-          name: benchmark-results-pr
-          path: ./results/
-      
-      - name: Check regression thresholds
-        id: check
-        run: |
-          # Artifact is downloaded to results/ (repo root), script is in benchmark/
-          python3 benchmark/scripts/check-regression.py results/benchmark_data.json
-        
-      - name: Report regressions
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            
-            // Try to read failed metrics for detailed info
-            let failedMetrics = null;
-            let benchmarkData = null;
-            try {
-              const failedPath = path.join(process.env.GITHUB_WORKSPACE, 'results', 'failed_metrics.json');
-              const dataPath = path.join(process.env.GITHUB_WORKSPACE, 'results', 'benchmark_data.json');
-              
-              // Debug logging
-              console.log('Looking for files at:');
-              console.log('  - failedPath:', failedPath);
-              console.log('  - dataPath:', dataPath);
-              console.log('  - GITHUB_WORKSPACE:', process.env.GITHUB_WORKSPACE);
-              
-              // List workspace contents for debugging
-              try {
-                const workspaceContents = fs.readdirSync(process.env.GITHUB_WORKSPACE);
-                console.log('  - Workspace contents:', workspaceContents);
-                if (fs.existsSync(path.join(process.env.GITHUB_WORKSPACE, 'results'))) {
-                  const resultsContents = fs.readdirSync(path.join(process.env.GITHUB_WORKSPACE, 'results'));
-                  console.log('  - results/ contents:', resultsContents);
-                } else {
-                  console.log('  - results/ directory does not exist');
-                }
-              } catch (err) {
-                console.log('  - Could not list directory:', err.message);
-              }
-              
-              if (fs.existsSync(failedPath)) {
-                failedMetrics = JSON.parse(fs.readFileSync(failedPath, 'utf8'));
-                console.log('Found failed_metrics.json:', Object.keys(failedMetrics));
-              } else {
-                console.log('failed_metrics.json not found');
-              }
-              
-              if (fs.existsSync(dataPath)) {
-                benchmarkData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-                console.log('Found benchmark_data.json');
-              } else {
-                console.log('benchmark_data.json not found');
-              }
-            } catch (e) {
-              console.log('Could not read metrics files:', e.message);
-            }
-            
-            // Build detailed regression report
-            let body = `## 🚨 Performance Regression Detected\n\n`;
-            body += `This PR introduces performance regressions that exceed the acceptable thresholds.\n\n`;
-            
-            // Failed metrics table
-            if (failedMetrics && Object.keys(failedMetrics).length > 0) {
-              body += `### Failed Metrics\n\n`;
-              body += `| Metric | Actual | Threshold | Unit |\n`;
-              body += `|--------|--------|-----------|------|\n`;
-              
-              for (const [metric, info] of Object.entries(failedMetrics)) {
-                body += `| **${metric}** | ${info.value} | ${info.threshold} | ${info.unit} |\n`;
-              }
-              
-              body += `\n`;
-            } else if (benchmarkData && benchmarkData.results) {
-              // Fallback: show all results
-              body += `### Benchmark Results\n\n`;
-              body += `| Metric | Value |\n`;
-              body += `|--------|-------|\n`;
-              
-              for (const [metric, value] of Object.entries(benchmarkData.results)) {
-                if (value !== null && value !== undefined) {
-                  body += `| ${metric} | ${value} |\n`;
-                }
-              }
-              
-              body += `\n`;
-            }
-            
-            // Container-specific thresholds
-            body += `### Thresholds Reference (Container Mode)\n\n`;
-            body += `| Metric | Max Allowed | Description |\n`;
-            body += `|--------|-------------|-------------|\n`;
-            body += `| Memory | 20 MB | Idle memory footprint (containerized) |\n`;
-            body += `| Cold Start | 500 ms | Container startup + server ready |\n`;
-            body += `| Execution P99 | 100 ms | Execution API latency |\n`;
-            body += `| Cache P99 | 1000 μs | Cache read P99 |\n`;
-            body += `| Cleanup Rate | 95% | Resource cleanup after disconnections |\n\n`;
-            
-            body += `### Next Steps\n\n`;
-            body += `1. 📊 [View full benchmark results and logs](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
-            body += `2. 🔍 Download artifacts to analyze detailed metrics\n`;
-            body += `3. 🛠️  Identify and fix the performance regression\n`;
-            body += `4. 🔄 Re-run benchmarks after optimizations\n\n`;
-            body += `> 💡 **Tip:** These benchmarks run in Docker containers for realistic testing.\n\n`;
-            body += `---\n`;
-            body += `*Benchmark run: ${new Date().toISOString()}*`;
-            
-            const issueNumber = context.issue.number || context.payload.pull_request?.number;
-            if (!issueNumber) {
-              console.log('No PR number found');
-              return;
-            }
-            
-            try {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                body: body
-              });
-              console.log('Posted regression comment with details');
-            } catch (error) {
-              console.log('Could not post regression comment:', error.message);
-            }
