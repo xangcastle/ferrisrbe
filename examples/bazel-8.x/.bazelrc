@@ -6,6 +6,9 @@ startup --host_jvm_args=-XX:MaxGCPauseMillis=200
 
 build --symlink_prefix=/
 # Remote Cache Configuration
-build:remote-cache --remote_cache=grpc://localhost:30094
+# Railway Public Remote Cache
+build:remote-cache --remote_cache=grpcs://ferrisrbe-server-production.up.railway.app
+# Local development (NodePort)
+# build:remote-cache --remote_cache=grpc://localhost:30094
 build:remote-cache --remote_upload_local_results=true
 build:remote-cache --remote_timeout=300
