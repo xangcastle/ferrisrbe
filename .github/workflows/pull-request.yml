@@ -34,7 +34,7 @@ jobs:
         uses: bazelbuild/setup-bazelisk@v3
 
       - name: Mount Bazel cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
           key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
@@ -57,7 +57,7 @@ jobs:
         uses: bazelbuild/setup-bazelisk@v3
 
       - name: Mount Bazel cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
           key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
@@ -85,7 +85,7 @@ jobs:
         uses: bazelbuild/setup-bazelisk@v3
 
       - name: Mount Bazel cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
           key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
@@ -114,7 +114,7 @@ jobs:
           cluster_name: ferrisrbe-test
 
       - name: Mount Bazel cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/bazel
           key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
