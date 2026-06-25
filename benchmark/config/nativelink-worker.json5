@@ -1,0 +1,93 @@
+// NativeLink worker for benchmarking. The worker binary is injected into a
+// plain ubuntu:22.04 container by the nativelink-worker-init service (the
+// upstream image is a static musl binary with no shell, unusable as an
+// execution environment by itself).
+//
+// ${NATIVELINK_ENDPOINT} is interpolated by nativelink at startup, not by
+// docker-compose.
+{
+  stores: [
+    {
+      name: "GRPC_LOCAL_STORE",
+      grpc: {
+        instance_name: "",
+        endpoints: [
+          {
+            address: "grpc://${NATIVELINK_ENDPOINT:-127.0.0.1}:50051",
+          },
+        ],
+        store_type: "cas",
+      },
+    },
+    {
+      name: "GRPC_LOCAL_AC_STORE",
+      grpc: {
+        instance_name: "",
+        endpoints: [
+          {
+            address: "grpc://${NATIVELINK_ENDPOINT:-127.0.0.1}:50051",
+          },
+        ],
+        store_type: "ac",
+      },
+    },
+    {
+      name: "WORKER_FAST_SLOW_STORE",
+      fast_slow: {
+        fast: {
+          filesystem: {
+            content_path: "/workspace/content_path-cas",
+            temp_path: "/workspace/tmp_path-cas",
+            eviction_policy: {
+              max_bytes: "5gb",
+            },
+          },
+        },
+        slow: {
+          ref_store: {
+            name: "GRPC_LOCAL_STORE",
+          },
+        },
+      },
+    },
+  ],
+  workers: [
+    {
+      local: {
+        worker_api_endpoint: {
+          uri: "grpc://${NATIVELINK_ENDPOINT:-127.0.0.1}:50061",
+        },
+        cas_fast_slow_store: "WORKER_FAST_SLOW_STORE",
+        upload_action_result: {
+          ac_store: "GRPC_LOCAL_AC_STORE",
+        },
+        work_directory: "/workspace/work",
+        platform_properties: {
+          cpu_count: {
+            query_cmd: "nproc",
+          },
+          cpu_arch: {
+            values: [
+              "x86_64",
+            ],
+          },
+          OSFamily: {
+            values: [
+              "linux",
+              "Linux",
+            ],
+          },
+          ISA: {
+            values: [
+              "x86-64",
+            ],
+          },
+        },
+      },
+    },
+  ],
+  servers: [],
+  global: {
+    max_open_files: 524288,
+  },
+}
