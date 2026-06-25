@@ -1,15 +1,18 @@
 # BuildBuddy Configuration
-# Minimal config for benchmarking
+# Minimal config for benchmarking — CAS only, no Redis dependency.
+#
+# Redis health checks timeout under QEMU (amd64 on arm64) due to emulation
+# overhead. Auth works correctly without Redis when remote_execution is disabled.
 
 app:
   build_buddy_url: "http://localhost:8080"
   events_api_url: "grpc://localhost:1985"
   cache_api_url: "grpc://localhost:1985"
   remote_execution_api_url: "grpc://localhost:1985"
-  no_default_user_group: true
+  no_default_user_group: false
 
 database:
-  data_source: "postgres://buildbuddy:buildbuddy@buildbuddy-postgres:5432/buildbuddy?sslmode=disable"
+  data_source: "sqlite3:///data/buildbuddy.db"
 
 storage:
   disk:
@@ -24,16 +27,10 @@ cache:
         max_size_bytes: 10000000000
 
 remote_execution:
-  enabled: true
-  default_pool_name: "default"
-  pools:
-    - name: "default"
-      os: "linux"
-      architecture: "amd64"
-  redis_target: "buildbuddy-redis:6379"
+  enabled: false
 
 executor:
-  enabled: false  # Run separately
+  enabled: false
 
 auth:
   enable_anonymous_usage: true

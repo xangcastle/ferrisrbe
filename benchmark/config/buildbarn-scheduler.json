@@ -1,44 +1,32 @@
 {
-  "httpListenAddress": ":8982",
   "clientGrpcServers": [
     {
       "listenAddresses": [":8982"],
-      "authentication": {
-        "allowAll": true
-      }
+      "authenticationPolicy": {"allow": {}}
     }
   ],
   "workerGrpcServers": [
     {
       "listenAddresses": [":8983"],
-      "authentication": {
-        "allowAll": true
-      }
+      "authenticationPolicy": {"allow": {}}
     }
   ],
-  "scheduler": {
-    "buildQueue": {
-      "redis": {
-        "endpoint": "buildbarn-redis:6379"
-      }
-    },
-    "actionRouter": {
-      "simple": {}
-    }
-  },
   "contentAddressableStorage": {
-    "shard": {
-      "shards": [
-        {
-          "backend": {
-            "grpc": {
-              "endpoint": "buildbarn-storage:8981"
-            }
-          },
-          "weight": 1
-        }
-      ]
+    "grpc": {"client": {"address": "buildbarn-storage:8981"}}
+  },
+  "executeAuthorizer": {"allow": {}},
+  "modifyDrainsAuthorizer": {"allow": {}},
+  "killOperationsAuthorizer": {"allow": {}},
+  "synchronizeAuthorizer": {"allow": {}},
+  "actionRouter": {
+    "simple": {
+      "platformKeyExtractor": {"action": {}},
+      "initialSizeClassAnalyzer": {
+        "defaultExecutionTimeout": "600s",
+        "maximumExecutionTimeout": "3600s"
+      }
     }
   },
+  "platformQueueWithNoWorkersTimeout": "900s",
   "maximumMessageSizeBytes": 16777216
 }

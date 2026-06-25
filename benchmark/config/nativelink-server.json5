@@ -1,0 +1,164 @@
+// NativeLink all-in-one server (CAS + AC + scheduler) for benchmarking.
+//
+// Unlike ferrisrbe/buildbarn/buildfarm, NativeLink serves the CAS in the same
+// process as the scheduler, so this single container replaces both the
+// "server" and "bazel-remote" roles of the other stacks. Store sizing mirrors
+// the ferrisrbe stack: 10GB disk-backed CAS (BAZEL_REMOTE_MAX_SIZE=10) with a
+// small in-memory hot tier so the server fits the same 512M container limit.
+{
+  stores: [
+    {
+      name: "CAS_MAIN_STORE",
+      existence_cache: {
+        backend: {
+          verify: {
+            verify_size: true,
+            verify_hash: true,
+            backend: {
+              fast_slow: {
+                fast: {
+                  size_partitioning: {
+                    size: "64kb",
+                    lower_store: {
+                      memory: {
+                        eviction_policy: {
+                          max_bytes: "64mb",
+                          max_count: 100000,
+                        },
+                      },
+                    },
+                    upper_store: {
+                      noop: {},
+                    },
+                  },
+                },
+                slow: {
+                  compression: {
+                    compression_algorithm: {
+                      lz4: {},
+                    },
+                    backend: {
+                      filesystem: {
+                        content_path: "/data/content_path-cas",
+                        temp_path: "/data/tmp_path-cas",
+                        eviction_policy: {
+                          max_bytes: "10gb",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "AC_MAIN_STORE",
+      completeness_checking: {
+        backend: {
+          fast_slow: {
+            fast: {
+              size_partitioning: {
+                size: "1kb",
+                lower_store: {
+                  memory: {
+                    eviction_policy: {
+                      max_bytes: "16mb",
+                      max_count: 150000,
+                    },
+                  },
+                },
+                upper_store: {
+                  noop: {},
+                },
+              },
+            },
+            slow: {
+              filesystem: {
+                content_path: "/data/content_path-ac",
+                temp_path: "/data/tmp_path-ac",
+                eviction_policy: {
+                  max_bytes: "1gb",
+                },
+              },
+            },
+          },
+        },
+        cas_store: {
+          ref_store: {
+            name: "CAS_MAIN_STORE",
+          },
+        },
+      },
+    },
+  ],
+  schedulers: [
+    {
+      name: "MAIN_SCHEDULER",
+      simple: {
+        supported_platform_properties: {
+          cpu_count: "priority",
+          memory_kb: "priority",
+          cpu_arch: "priority",
+          OSFamily: "priority",
+          ISA: "exact",
+        },
+      },
+    },
+  ],
+  servers: [
+    {
+      listener: {
+        http: {
+          socket_address: "0.0.0.0:50051",
+        },
+      },
+      services: {
+        cas: [
+          {
+            cas_store: "CAS_MAIN_STORE",
+          },
+        ],
+        ac: [
+          {
+            ac_store: "AC_MAIN_STORE",
+          },
+        ],
+        capabilities: [
+          {
+            remote_execution: {
+              scheduler: "MAIN_SCHEDULER",
+            },
+          },
+        ],
+        execution: [
+          {
+            cas_store: "CAS_MAIN_STORE",
+            scheduler: "MAIN_SCHEDULER",
+          },
+        ],
+        bytestream: {
+          cas_stores: {
+            "": "CAS_MAIN_STORE",
+          },
+        },
+      },
+    },
+    {
+      listener: {
+        http: {
+          socket_address: "0.0.0.0:50061",
+        },
+      },
+      services: {
+        // Worker-only backend API; not exposed on the host.
+        worker_api: {
+          scheduler: "MAIN_SCHEDULER",
+        },
+        health: {},
+      },
+    },
+  ],
+}

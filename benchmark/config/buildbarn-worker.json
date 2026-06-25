@@ -1,36 +1,38 @@
 {
-  "scheduler": {
-    "endpoint": "buildbarn-scheduler:8983"
+  "blobstore": {
+    "contentAddressableStorage": {
+      "grpc": {"client": {"address": "buildbarn-storage:8981"}}
+    },
+    "actionCache": {
+      "grpc": {"client": {"address": "buildbarn-storage:8981"}}
+    }
   },
-  "contentAddressableStorage": {
-    "shard": {
-      "shards": [
+  "browserUrl": "http://localhost:7984",
+  "scheduler": {"address": "buildbarn-scheduler:8983"},
+  "maximumMessageSizeBytes": 16777216,
+  "buildDirectories": [
+    {
+      "native": {
+        "buildDirectoryPath": "/worker/build",
+        "cacheDirectoryPath": "/worker/cache",
+        "maximumCacheFileCount": 10000,
+        "maximumCacheSizeBytes": 1073741824,
+        "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+      },
+      "runners": [
         {
-          "backend": {
-            "grpc": {
-              "endpoint": "buildbarn-storage:8981"
-            }
-          },
-          "weight": 1
+          "endpoint": {"address": "unix:///worker/runner"},
+          "concurrency": 4,
+          "platform": {"properties": []}
         }
       ]
     }
-  },
-  "buildDirectoryPath": "/worker/build",
-  "cacheDirectoryPath": "/worker/cache",
-  "maximumCacheFileCount": 10000,
-  "maximumCacheSizeBytes": 1073741824,
-  "instanceName": "",
-  "platform": {
-    "properties": [
-      {
-        "name": "OSFamily",
-        "value": "linux"
-      },
-      {
-        "name": "container-image",
-        "value": "docker://marketplace.gcr.io/google/rbe-ubuntu16-04"
-      }
-    ]
+  ],
+  "inputDownloadConcurrency": 10,
+  "outputUploadConcurrency": 10,
+  "directoryCache": {
+    "maximumCount": 1000,
+    "maximumSizeBytes": 1024000,
+    "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
   }
 }
