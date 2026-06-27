@@ -81,42 +81,40 @@ spec:
               memory: "512Mi"
               cpu: "500m"
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: rbe-worker
-  namespace: rbe
-spec:
-  ports:
-    - port: 9093
-  selector:
-    app: rbe-worker
----
-# bazel-remote fix: disable service links to avoid env var injection
+# rbe-cache: FerrisRBE native cache server (replaces bazel-remote-cache)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: bazel-remote
+  name: rbe-cache
   namespace: rbe
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: bazel-remote
+      app: rbe-cache
   template:
     metadata:
       labels:
-        app: bazel-remote
+        app: rbe-cache
     spec:
       enableServiceLinks: false  # Disable K8s service env injection
       containers:
-        - name: bazel-remote
-          image: buchgr/bazel-remote-cache:latest
-          args:
-            - --dir=/data
-            - --max_size=10
-            - --grpc_address=:9094
-            - --http_address=:8080
+        - name: rbe-cache
+          image: ferrisrbe/cache:latest
+          imagePullPolicy: Never
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: RBE_CACHE_PORT
+              value: "9094"
+            - name: RBE_CACHE_HTTP_PORT
+              value: "8080"
+            - name: RBE_CACHE_DIR
+              value: "/data"
+            - name: RBE_CACHE_MAX_SIZE_GB
+              value: "10"
+            - name: RBE_CACHE_AC_MAX_SIZE_GB
+              value: "2"
           ports:
             - containerPort: 9094
               name: grpc
@@ -132,6 +130,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
       volumes:
         - name: data
           emptyDir: {}
@@ -139,54 +149,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: bazel-remote
+  name: rbe-cache
   namespace: rbe
 spec:
   ports:
     - port: 9094
-      targetPort: 9094
+      targetPort: grpc
       name: grpc
     - port: 8080
-      targetPort: 8080
+      targetPort: http
       name: http
   selector:
-    app: bazel-remote
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis
-  namespace: rbe
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-    spec:
-      containers:
-        - name: redis
-          image: redis:7-alpine
-          ports:
-            - containerPort: 6379
-          resources:
-            requests:
-              memory: "64Mi"
-              cpu: "50m"
-            limits:
-              memory: "256Mi"
-              cpu: "100m"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis
-  namespace: rbe
-spec:
-  ports:
-    - port: 6379
-  selector:
-    app: redis
+    app: rbe-cache
+

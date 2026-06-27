@@ -96,16 +96,18 @@ jobs:
       pull-requests: write
 
     services:
-      bazel-remote:
-        image: buchgr/bazel-remote-cache:latest
+      rbe-cache:
+        image: xangcastle/ferris-cache:latest
         ports:
           - 9094:9094
           - 8080:8080
         env:
-          BAZEL_REMOTE_GRPC_PORT: 9094
-          BAZEL_REMOTE_HTTP_PORT: 8080
-          BAZEL_REMOTE_DIR: /data
-          BAZEL_REMOTE_MAX_SIZE: 1
+          RUST_LOG: info
+          RBE_CACHE_PORT: 9094
+          RBE_CACHE_HTTP_PORT: 8080
+          RBE_CACHE_DIR: /data
+          RBE_CACHE_MAX_SIZE_GB: 1
+          RBE_CACHE_AC_MAX_SIZE_GB: 1
 
     env:
       CAS_ENDPOINT: localhost:9094
@@ -283,18 +285,20 @@ jobs:
     permissions:
       contents: read
     
-    # Use GitHub Actions services for bazel-remote (CAS)
+    # Use GitHub Actions services for rbe-cache (CAS)
     services:
-      bazel-remote:
-        image: buchgr/bazel-remote-cache:latest
+      rbe-cache:
+        image: xangcastle/ferris-cache:latest
         ports:
           - 9094:9094
           - 8080:8080
         env:
-          BAZEL_REMOTE_GRPC_PORT: 9094
-          BAZEL_REMOTE_HTTP_PORT: 8080
-          BAZEL_REMOTE_DIR: /data
-          BAZEL_REMOTE_MAX_SIZE: 1
+          RUST_LOG: info
+          RBE_CACHE_PORT: 9094
+          RBE_CACHE_HTTP_PORT: 8080
+          RBE_CACHE_DIR: /data
+          RBE_CACHE_MAX_SIZE_GB: 1
+          RBE_CACHE_AC_MAX_SIZE_GB: 1
     
     env:
       CAS_ENDPOINT: localhost:9094

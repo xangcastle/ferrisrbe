@@ -2,8 +2,8 @@
 # Reference: https://github.com/TraceMachina/nativelink
 #
 # NativeLink is a single Rust binary serving CAS, Action Cache and scheduler
-# in one process, so there is no separate bazel-remote/Redis sidecar like in
-# the FerrisRBE stack. The worker runs the same binary inside ubuntu:22.04
+# in one process, so there is no separate rbe-cache sidecar like in the
+# FerrisRBE stack. The worker runs the same binary inside ubuntu:22.04
 # (injected by the worker-init container) so actions have a real shell and
 # userland to execute in.
 #

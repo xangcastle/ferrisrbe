@@ -8,6 +8,7 @@
 pub mod cache;
 pub mod cas;
 pub mod execution;
+pub mod server;
 pub mod types;
 pub mod version;
 pub mod worker;
@@ -44,6 +45,14 @@ pub mod proto {
         }
         pub mod rpc {
             include!(concat!(env!("OUT_DIR"), "/google.rpc.rs"));
+        }
+    }
+
+    pub mod ferris {
+        pub mod rbe {
+            pub mod worker {
+                tonic::include_proto!("ferris.rbe.worker");
+            }
         }
     }
 }

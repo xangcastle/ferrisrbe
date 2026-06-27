@@ -3,3 +3,4 @@ target
 MODULE.bazel.lock
 logs_*
 .ijwb
+cache-data

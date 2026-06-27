@@ -1,32 +1,39 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "name": "FerrisRBE - Full Remote Build Execution",
-  "description": "High-performance RBE server for Bazel with Remote Cache and Remote Execution. Includes CAS storage, Redis metadata store, RBE server, and workers.",
+  "description": "High-performance RBE server for Bazel with Remote Cache and Remote Execution. Includes native CAS and ActionCache storage, RBE server, and workers.",
   "icon": "https://bazel.build/images/bazel-icon.svg",
   "author": "xangcastle",
   "services": {
-    "bazel-remote": {
-      "image": "buchgr/bazel-remote-cache:latest",
+    "rbe-cache": {
+      "image": "xangcastle/ferris-cache:latest",
       "variables": {
-        "BAZEL_REMOTE_DIR": {
+        "RUST_LOG": {
+          "default": "info",
+          "description": "Log level"
+        },
+        "RBE_CACHE_PORT": {
+          "default": "9094",
+          "description": "gRPC port for CAS and ActionCache"
+        },
+        "RBE_CACHE_HTTP_PORT": {
+          "default": "8080",
+          "description": "HTTP port for status endpoint"
+        },
+        "RBE_CACHE_DIR": {
           "default": "/data",
           "description": "Directory for CAS storage"
         },
-        "BAZEL_REMOTE_MAX_SIZE": {
+        "RBE_CACHE_MAX_SIZE_GB": {
           "default": "5",
-          "description": "Maximum cache size in GB"
+          "description": "Maximum CAS cache size in GB"
+        },
+        "RBE_CACHE_AC_MAX_SIZE_GB": {
+          "default": "1",
+          "description": "Maximum Action Cache size in GB"
         }
       },
       "volumes": ["/data"]
-    },
-    "redis": {
-      "image": "redis:7-alpine",
-      "variables": {
-        "REDIS_ARGS": {
-          "default": "--appendonly yes",
-          "description": "Redis startup arguments"
-        }
-      }
     },
     "ferrisrbe-server": {
       "image": "xangcastle/ferris-server:latest",
@@ -44,12 +51,8 @@
           "description": "Log level (trace/debug/info/warn/error)"
         },
         "CAS_ENDPOINT": {
-          "default": "bazel-remote:9092",
-          "description": "CAS (bazel-remote) endpoint - uses port 9092"
-        },
-        "REDIS_ENDPOINT": {
-          "default": "redis:6379",
-          "description": "Redis endpoint"
+          "default": "rbe-cache:9094",
+          "description": "Native cache server (rbe-cache) endpoint"
         },
         "RBE_L1_CACHE_CAPACITY": {
           "default": "100000",
@@ -68,7 +71,7 @@
         "path": "/health",
         "timeout": 100
       },
-      "dependsOn": ["bazel-remote", "redis"]
+      "dependsOn": ["rbe-cache"]
     },
     "ferrisrbe-worker": {
       "image": "xangcastle/ferris-worker:latest",
@@ -82,8 +85,8 @@
           "description": "RBE server endpoint"
         },
         "CAS_ENDPOINT": {
-          "default": "http://bazel-remote:9092",
-          "description": "CAS endpoint - uses port 9092"
+          "default": "http://rbe-cache:9094",
+          "description": "Native cache server endpoint"
         },
         "RUST_LOG": {
           "default": "info",

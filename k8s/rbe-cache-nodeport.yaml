@@ -1,12 +1,12 @@
-# NodePort service for bazel-remote cache
+# NodePort service for rbe-cache
 # This allows direct access without kubectl port-forward
 apiVersion: v1
 kind: Service
 metadata:
-  name: bazel-remote-external
+  name: rbe-cache-external
   namespace: rbe
   labels:
-    app: bazel-remote
+    app: rbe-cache
 spec:
   type: NodePort
   ports:
@@ -21,4 +21,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app: bazel-remote
+    app: rbe-cache

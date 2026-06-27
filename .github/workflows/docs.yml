@@ -23,23 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Bazel
+        uses: bazelbuild/setup-bazelisk@v3
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
-          cargo install mdbook --version ^0.4 || true
 
       - name: Build Rust docs
         run: |
-          cargo doc --no-deps --document-private-items
+          bazel build //:rbe_lib_doc
 
       - name: Prepare docs for GitHub Pages
         run: |
           mkdir -p _site
-          cp -r target/doc/* _site/
+          cp -r $(bazel cquery --output=files //:rbe_lib_doc)/* _site/
           echo "<meta http-equiv=\"refresh\" content=\"0;url=./rbe_server/\">" > _site/index.html
           touch _site/.nojekyll
 

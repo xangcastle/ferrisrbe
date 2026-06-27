@@ -185,13 +185,13 @@ Actualizar:
 
 ```bash
 # Test unitarios del sistema de versiones
-cargo test version
+bazel test //:rbe_lib_test --test_filter=version
 
 # Test específico de handlers
-cargo test --lib version::handlers
+bazel test //:rbe_lib_test --test_filter=version::handlers
 
 # Test de detección
-cargo test --lib version::detector
+bazel test //:rbe_lib_test --test_filter=version::detector
 ```
 
 ## Debugging
@@ -200,7 +200,7 @@ Habilitar logs de debug:
 
 ```bash
 export RUST_LOG=debug
-cargo run
+bazel run //:rbe-server
 ```
 
 Verás mensajes como:

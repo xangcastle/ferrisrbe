@@ -1,0 +1,30 @@
+{{- if .Values.cache.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-cache
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: cache
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.cache.service.type }}
+  ports:
+    - port: {{ .Values.cache.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+      {{- if and (eq .Values.cache.service.type "NodePort") .Values.cache.service.nodePortGrpc }}
+      nodePort: {{ .Values.cache.service.nodePortGrpc }}
+      {{- end }}
+    - port: {{ .Values.cache.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.cache.service.type "NodePort") .Values.cache.service.nodePortHttp }}
+      nodePort: {{ .Values.cache.service.nodePortHttp }}
+      {{- end }}
+  selector:
+    app.kubernetes.io/component: cache
+    {{- include "ferrisrbe.selectorLabels" . | nindent 4 }}
+{{- end }}

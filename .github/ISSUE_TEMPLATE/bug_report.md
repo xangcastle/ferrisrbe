@@ -42,7 +42,7 @@ Paste relevant Bazel output here
  - Kubernetes version: [e.g. 1.28]
  - FerrisRBE version: [e.g. 0.1.0 or git commit]
  - Bazel version: [e.g. 7.4.0]
- - Deployment method: [e.g. Helm, kubectl, Docker Compose]
+ - Deployment method: [e.g. Helm, kubectl, Podman Compose]
 
 **Configuration**
 

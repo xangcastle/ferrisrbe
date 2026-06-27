@@ -180,7 +180,7 @@ def upload_via_bytestream(
         resource_name = f"uploads/{int(time.time())}/blobs/{file_hash}/{file_size}"
         
         # Stream chunks
-        chunk_size = 2 * 1024 * 1024  # 2MB chunks (stay under bazel-remote 4MB gRPC limit)
+        chunk_size = 2 * 1024 * 1024  # 2MB chunks (stay under rbe-cache 4MB gRPC limit)
         
         file_size = os.path.getsize(file_path)
 

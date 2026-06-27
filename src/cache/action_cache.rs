@@ -1,3 +1,4 @@
+use crate::proto::build::bazel::remote::execution::v2::ActionResult as ProtoActionResult;
 use crate::types::{AtomicInstant, DigestInfo, Result, DASHMAP_SHARD_COUNT};
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -62,48 +63,24 @@ impl<T> CacheEntry<T> {
     }
 }
 
+/// In-memory representation of an action cache entry.
+///
+/// Wraps the REAPI `ActionResult` proto so that all fields (outputs, stdout/stderr
+/// digests, execution metadata, etc.) are preserved exactly as Bazel expects.
 #[derive(Debug, Clone)]
-pub struct ActionResult {
-    #[allow(dead_code)]
+pub struct CacheActionResult {
     pub digest: DigestInfo,
-    pub exit_code: i32,
-    pub stdout_digest: Option<DigestInfo>,
-    pub stderr_digest: Option<DigestInfo>,
-    pub output_files: Vec<OutputFile>,
-    pub output_directories: Vec<OutputDirectory>,
-    #[allow(dead_code)]
-    pub execution_metadata: ExecutionMetadata,
+    pub proto: ProtoActionResult,
 }
 
-#[derive(Debug, Clone)]
-pub struct OutputFile {
-    pub path: String,
-    pub digest: DigestInfo,
-    pub is_executable: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct OutputDirectory {
-    pub path: String,
-    pub tree_digest: DigestInfo,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ExecutionMetadata {
-    #[allow(dead_code)]
-    pub worker: String,
-    #[allow(dead_code)]
-    pub queued_duration: Duration,
-    #[allow(dead_code)]
-    pub execution_duration: Duration,
-    #[allow(dead_code)]
-    pub input_fetch_duration: Duration,
-    #[allow(dead_code)]
-    pub output_upload_duration: Duration,
+impl CacheActionResult {
+    pub fn new(digest: DigestInfo, proto: ProtoActionResult) -> Self {
+        Self { digest, proto }
+    }
 }
 
 pub struct L1ActionCache {
-    cache: DashMap<DigestInfo, CacheEntry<ActionResult>, ahash::RandomState>,
+    cache: DashMap<DigestInfo, CacheEntry<CacheActionResult>, ahash::RandomState>,
     max_capacity: usize,
     default_ttl: Duration,
     lru_queue: Mutex<VecDeque<DigestInfo>>,
@@ -128,7 +105,7 @@ impl L1ActionCache {
         }
     }
 
-    pub fn get(&self, digest: &DigestInfo) -> Option<ActionResult> {
+    pub fn get(&self, digest: &DigestInfo) -> Option<CacheActionResult> {
         let entry = self.cache.get(digest)?;
 
         if entry.is_expired() {
@@ -144,7 +121,7 @@ impl L1ActionCache {
         Some(result)
     }
 
-    pub fn put(&self, digest: DigestInfo, result: ActionResult) {
+    pub fn put(&self, digest: DigestInfo, result: CacheActionResult) {
         if self.cache.len() >= self.max_capacity {
             self.evict_oldest();
         }
@@ -179,7 +156,6 @@ impl L1ActionCache {
 
     /// Prune "ghost" entries from expiration heap (entries not in cache anymore)
     /// This prevents memory leak when LRU evicts but heap still references them.
-    /// Prune "ghost" entries from expiration heap (entries not in cache anymore).
     fn prune_ghost_entries(&self) {
         let mut heap = self.expiration_heap.lock();
 
@@ -251,7 +227,7 @@ impl L1ActionCache {
 
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
+        self.cache.len() == 0
     }
 }
 
@@ -278,11 +254,32 @@ impl L1ActionCache {
     }
 }
 
+/// Generic store interface used by `ActionCacheService`.
+///
+/// Both the in-memory L1 cache and the disk-backed L2 cache implement this so
+/// the service can work with either backend.
+#[async_trait::async_trait]
+pub trait ActionCacheStore: Send + Sync {
+    async fn get(&self, digest: &DigestInfo) -> Option<CacheActionResult>;
+    async fn put(&self, digest: DigestInfo, result: CacheActionResult);
+}
+
+#[async_trait::async_trait]
+impl ActionCacheStore for L1ActionCache {
+    async fn get(&self, digest: &DigestInfo) -> Option<CacheActionResult> {
+        L1ActionCache::get(self, digest)
+    }
+
+    async fn put(&self, digest: DigestInfo, result: CacheActionResult) {
+        L1ActionCache::put(self, digest, result);
+    }
+}
+
 #[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait L2Store: Send + Sync {
-    async fn get(&self, digest: &DigestInfo) -> Result<Option<ActionResult>>;
-    async fn put(&self, digest: &DigestInfo, result: &ActionResult) -> Result<()>;
+    async fn get(&self, digest: &DigestInfo) -> Result<Option<CacheActionResult>>;
+    async fn put(&self, digest: &DigestInfo, result: &CacheActionResult) -> Result<()>;
 }
 
 #[allow(dead_code)]
@@ -290,7 +287,7 @@ pub trait L2Store: Send + Sync {
 pub trait CasStore: Send + Sync {
     async fn exists(&self, digest: &DigestInfo) -> Result<bool>;
 
-    async fn validate_references(&self, result: &ActionResult) -> Result<bool>;
+    async fn validate_references(&self, result: &CacheActionResult) -> Result<bool>;
 }
 
 #[allow(dead_code)]
@@ -332,7 +329,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub async fn get(&self, digest: &DigestInfo) -> Result<Option<ActionResult>> {
+    pub async fn get(&self, digest: &DigestInfo) -> Result<Option<CacheActionResult>> {
         if let Some(result) = self.l1_cache.get(digest) {
             self.enqueue_validation(*digest);
             return Ok(Some(result));
@@ -348,7 +345,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub async fn put(&self, digest: &DigestInfo, result: &ActionResult) -> Result<()> {
+    pub async fn put(&self, digest: &DigestInfo, result: &CacheActionResult) -> Result<()> {
         self.l2_store.put(digest, result).await?;
 
         self.l1_cache.put(*digest, result.clone());
@@ -432,6 +429,16 @@ where
 mod tests {
     use super::*;
 
+    fn sample_result(digest: DigestInfo, exit_code: i32) -> CacheActionResult {
+        CacheActionResult::new(
+            digest,
+            ProtoActionResult {
+                exit_code,
+                ..Default::default()
+            },
+        )
+    }
+
     #[test]
     fn test_l1_cache_basic() {
         let cache = L1ActionCache::new(100, Duration::from_secs(60));
@@ -440,21 +447,13 @@ mod tests {
             1024,
         )
         .unwrap();
-        let result = ActionResult {
-            digest,
-            exit_code: 0,
-            stdout_digest: None,
-            stderr_digest: None,
-            output_files: vec![],
-            output_directories: vec![],
-            execution_metadata: ExecutionMetadata::default(),
-        };
+        let result = sample_result(digest, 0);
 
         cache.put(digest, result.clone());
         assert_eq!(cache.len(), 1);
 
         let retrieved = cache.get(&digest).unwrap();
-        assert_eq!(retrieved.exit_code, 0);
+        assert_eq!(retrieved.proto.exit_code, 0);
     }
 
     #[test]
@@ -471,15 +470,7 @@ mod tests {
 
         for i in 0..5 {
             let digest = DigestInfo::new(&format!("{:064x}", i), 1024).unwrap();
-            let result = ActionResult {
-                digest,
-                exit_code: i,
-                stdout_digest: None,
-                stderr_digest: None,
-                output_files: vec![],
-                output_directories: vec![],
-                execution_metadata: ExecutionMetadata::default(),
-            };
+            let result = sample_result(digest, i);
             cache.put(digest, result);
         }
 

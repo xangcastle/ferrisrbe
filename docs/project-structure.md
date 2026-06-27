@@ -2,8 +2,8 @@
 
 ```
 ferrisrbe/
-├── Cargo.toml              # Rust workspace configuration
-├── Cargo.lock              # Dependency lock file
+├── Cargo.toml              # Input for rules_rust crate_universe (Bazel only)
+├── Cargo.lock              # Dependency lock file for crate_universe
 ├── build.rs                # Build script (protobuf generation)
 │
 ├── oci/                    # OCI container definitions (rules_oci)
@@ -69,8 +69,7 @@ ferrisrbe/
 │   ├── configmap.yaml      # Environment configuration
 │   ├── server-deployment.yaml
 │   ├── worker-deployment.yaml
-│   ├── bazel-remote.yaml   # CAS storage (bazel-remote)
-│   ├── redis.yaml          # Metadata store
+│   ├── rbe-cache.yaml      # Native cache server (CAS + ActionCache)
 │   ├── deploy.sh           # Deployment script
 │   └── port-forward.sh     # Local port forwarding
 │
@@ -80,9 +79,6 @@ ferrisrbe/
 │       ├── values.yaml
 │       ├── templates/
 │       └── README.md
-│
-├── scripts/                # Utility scripts
-│   └── run-local.sh        # Run server locally with cargo
 │
 └── examples/               # Example Bazel projects for testing
     ├── bazel-7.4/
@@ -117,11 +113,11 @@ Helm chart for easy installation and configuration.
 The project uses **Bazel** for building, with `rules_rust` for Rust compilation and `rules_oci` for container images.
 
 ```bash
-# Build server and worker
-bazel build //:rbe-server //:rbe-worker
+# Build server, worker and cache
+bazel build //:rbe-server //:rbe-worker //:rbe-cache
 
 # Build container images
-bazel run //oci:server_load //oci:worker_load
+bazel run //oci:server_load //oci:worker_load //oci:cache_load
 
 # Run tests
 bazel test //...

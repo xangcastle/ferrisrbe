@@ -113,107 +113,107 @@ build_image() {
     log_info "Image size: $image_size"
 }
 
-# Start supporting services (bazel-remote for CAS)
+# Start supporting services (rbe-cache for CAS)
 start_services() {
     log_info "Starting supporting services..."
     
     # Check if we're using GitHub Actions services
     if [ -n "$BENCHMARK_SERVICES" ]; then
-        log_info "Using GitHub Actions services for bazel-remote..."
+        log_info "Using GitHub Actions services for rbe-cache..."
         # Wait for the service to be ready (GitHub Actions starts it automatically)
-        log_info "Waiting for bazel-remote to initialize..."
+        log_info "Waiting for rbe-cache to initialize..."
         for i in {1..90}; do
             if nc -z localhost 9094 2>/dev/null; then
-                log_success "CAS (bazel-remote) is ready on port 9094"
+                log_success "CAS (rbe-cache) is ready on port 9094"
                 sleep 3
                 return 0
             fi
             if [ $((i % 10)) -eq 0 ]; then
-                log_info "Still waiting for bazel-remote... (attempt $i/90)"
+                log_info "Still waiting for rbe-cache... (attempt $i/90)"
             fi
             sleep 2
         done
-        log_warn "bazel-remote did not become ready in time"
+        log_warn "rbe-cache did not become ready in time"
         return 1
     fi
     
-    # Check if we're in local mode (auto-detect and start bazel-remote if needed)
+    # Check if we're in local mode (auto-detect and start rbe-cache if needed)
     if [ -n "$BENCHMARK_LOCAL" ] || [ -z "$BENCHMARK_SERVICES" ]; then
-        log_info "Checking for bazel-remote..."
+        log_info "Checking for rbe-cache..."
         
-        # Check if bazel-remote is already running (container or native)
-        if docker ps --filter "name=bazel-remote" --format '{{.Names}}' | grep -q "bazel-remote" || \
+        # Check if rbe-cache is already running (container or native)
+        if docker ps --filter "name=rbe-cache" --format '{{.Names}}' | grep -q "rbe-cache" || \
            nc -z localhost 9094 2>/dev/null; then
-            log_success "CAS (bazel-remote) already running on port 9094"
+            log_success "CAS (rbe-cache) already running on port 9094"
             return 0
         fi
         
-        # Try to start bazel-remote in Docker
-        start_bazel_remote_container
+        # Try to start rbe-cache in Docker
+        start_rbe_cache_container
         return $?
     fi
     
     # Verify CAS is available
     if nc -z localhost 9094 2>/dev/null; then
-        log_success "CAS (bazel-remote) available on port 9094"
+        log_success "CAS (rbe-cache) available on port 9094"
     else
         log_warn "CAS not available on port 9094, some tests may fail"
     fi
 }
 
-# Start bazel-remote in a container
-start_bazel_remote_container() {
-    log_info "Starting bazel-remote container..."
-    
+# Start rbe-cache in a container
+start_rbe_cache_container() {
+    log_info "Starting rbe-cache container..."
+
     # Check if a container already exists (stopped)
-    if docker ps -aq --filter "name=bazel-remote" | grep -q .; then
-        log_info "Removing existing bazel-remote container..."
-        docker rm -f bazel-remote >/dev/null 2>&1 || true
+    if docker ps -aq --filter "name=rbe-cache" | grep -q .; then
+        log_info "Removing existing rbe-cache container..."
+        docker rm -f rbe-cache >/dev/null 2>&1 || true
     fi
-    
+
     # Create data directory
-    mkdir -p "$RESULTS_DIR/bazel-remote-cache"
-    
+    mkdir -p "$RESULTS_DIR/rbe-cache-data"
+
     # Start container
     docker run -d \
-        --name bazel-remote \
+        --name rbe-cache \
         --network host \
         -p 9094:9094 \
         -p 8080:8080 \
-        -v "$RESULTS_DIR/bazel-remote-cache:/data" \
-        -e BAZEL_REMOTE_DIR=/data \
-        -e BAZEL_REMOTE_MAX_SIZE=1 \
-        buchgr/bazel-remote-cache:latest \
-        --port=9094 \
-        --grpc_port=9094 \
-        --dir=/data \
-        --max_size=1 >/dev/null 2>&1
-    
-    BAZEL_REMOTE_CONTAINER="bazel-remote"
-    
-    # Wait for bazel-remote to be ready
+        -v "$RESULTS_DIR/rbe-cache-data:/data" \
+        -e RUST_LOG=info \
+        -e RBE_CACHE_PORT=9094 \
+        -e RBE_CACHE_HTTP_PORT=8080 \
+        -e RBE_CACHE_DIR=/data \
+        -e RBE_CACHE_MAX_SIZE_GB=1 \
+        -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
+        xangcastle/ferris-cache:latest >/dev/null 2>&1
+
+    RBE_CACHE_CONTAINER="rbe-cache"
+
+    # Wait for rbe-cache to be ready
     for i in {1..60}; do
         if nc -z localhost 9094 2>/dev/null; then
-            log_success "bazel-remote container ready"
+            log_success "rbe-cache container ready"
             return 0
         fi
         if [ $((i % 10)) -eq 0 ]; then
-            log_info "Waiting for bazel-remote... (attempt $i/60)"
+            log_info "Waiting for rbe-cache... (attempt $i/60)"
         fi
         sleep 1
     done
-    
-    log_warn "bazel-remote failed to start within 60 seconds"
-    docker logs bazel-remote 2>/dev/null || true
+
+    log_warn "rbe-cache failed to start within 60 seconds"
+    docker logs rbe-cache 2>/dev/null || true
     return 1
 }
 
 # Stop supporting services
 stop_services() {
-    if [ -n "$BAZEL_REMOTE_CONTAINER" ]; then
-        log_info "Stopping bazel-remote container..."
-        docker stop "$BAZEL_REMOTE_CONTAINER" >/dev/null 2>&1 || true
-        docker rm "$BAZEL_REMOTE_CONTAINER" >/dev/null 2>&1 || true
+    if [ -n "$RBE_CACHE_CONTAINER" ]; then
+        log_info "Stopping rbe-cache container..."
+        docker stop "$RBE_CACHE_CONTAINER" >/dev/null 2>&1 || true
+        docker rm "$RBE_CACHE_CONTAINER" >/dev/null 2>&1 || true
     fi
 }
 
@@ -433,13 +433,13 @@ run_light_benchmarks() {
         --operation read \
         --output "$RESULTS_DIR/cache_${TIMESTAMP}.json" || true
     
-    # 4. Cold start (single measurement) - measured AFTER bazel-remote is ready
+    # 4. Cold start (single measurement) - measured AFTER rbe-cache is ready
     log_info "Test 4/5: Cold start time (container)..."
     
-    # Ensure bazel-remote is ready before measuring cold start
-    log_info "  Verifying bazel-remote is ready..."
+    # Ensure rbe-cache is ready before measuring cold start
+    log_info "  Verifying rbe-cache is ready..."
     if ! nc -z localhost 9094 2>/dev/null; then
-        log_warn "  bazel-remote not ready, waiting..."
+        log_warn "  rbe-cache not ready, waiting..."
         for i in {1..30}; do
             if nc -z localhost 9094 2>/dev/null; then
                 break
@@ -449,7 +449,7 @@ run_light_benchmarks() {
     fi
     
     if nc -z localhost 9094 2>/dev/null; then
-        log_info "  bazel-remote ready, measuring container cold start..."
+        log_info "  rbe-cache ready, measuring container cold start..."
         
         # Stop current container
         stop_server_container "$SERVER_CONTAINER"
@@ -491,7 +491,7 @@ run_light_benchmarks() {
             stop_server_container "$NEW_CONTAINER"
         fi
     else
-        log_warn "  bazel-remote not available, skipping cold start measurement"
+        log_warn "  rbe-cache not available, skipping cold start measurement"
         echo "0" > "$RESULTS_DIR/coldstart_${TIMESTAMP}.txt"
     fi
     

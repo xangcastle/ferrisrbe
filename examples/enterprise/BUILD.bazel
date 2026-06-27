@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load(":tree_generator.bzl", "tree_generator")
 
 # ==========================================
 # 1. CAS Stress: Very Large Files
@@ -32,18 +33,9 @@ genrule(
 # 2. Tree Stress: Massive Directory Trees
 # ==========================================
 
-genrule(
+tree_generator(
     name = "tree_stress_generate",
-    outs = ["massive_tree"],
-    cmd = """
-python3 -c '
-import os
-os.makedirs("$@", exist_ok=True)
-for i in range(50000):
-    with open(f"$@/file_{i}.txt", "w") as f:
-        f.write(f"Test content {i}\\n")
-'
-    """,
+    output_name = "massive_tree",
     tags = ["no-remote-cache"],
 )
 

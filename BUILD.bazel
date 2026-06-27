@@ -1,26 +1,5 @@
-"""Build file raíz para FerrisRBE.
-
-Este archivo define los binarios de Rust para el servidor y worker RBE.
-
-IMPORTANTE: Sobre el uso de build.rs con tonic-build en Bazel
--------------------------------------------------------------
-Este proyecto demuestra cómo usar build.rs con tonic-build dentro del sandbox
-de Bazel:
-
-1. Los archivos proto están en el filegroup //proto:all_protos
-2. El cargo_build_script usa esos archivos como data
-3. El build.rs busca los archivos en el execroot (subiendo desde runfiles)
-
-Esto permite bazelizar proyectos Rust existentes sin modificar su estructura
-interna ni migrar completamente a rules_proto.
-"""
-
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-
-# ============================================================================
-# Script de compilación para generar código protobuf con tonic-build
-# ============================================================================
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc", "rust_library", "rust_test")
 
 cargo_build_script(
     name = "build_script",
@@ -28,7 +7,6 @@ cargo_build_script(
     build_script_env = {
         "PROTOC": "$(execpath @com_google_protobuf//:protoc)",
     },
-    # Usar el filegroup de proto para tener todos los archivos disponibles
     data = [
         "//proto:all_protos",
         "@com_google_protobuf//:well_known_type_protos",
@@ -41,23 +19,23 @@ cargo_build_script(
     ],
 )
 
-# ============================================================================
-# Biblioteca compartida (lib.rs)
-# ============================================================================
-
 rust_library(
     name = "rbe_lib",
-    crate_name = "rbe_server",
     srcs = glob(
         ["src/**/*.rs"],
-        exclude = ["src/main.rs", "src/bin/**/*.rs"],
+        exclude = [
+            "src/main.rs",
+            "src/bin/**/*.rs",
+        ],
     ),
     compile_data = [":build_script"],
+    crate_name = "rbe_server",
     crate_root = "src/lib.rs",
     edition = "2021",
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":build_script",
         "@crates//:ahash",
@@ -87,15 +65,10 @@ rust_library(
         "@crates//:tracing-subscriber",
         "@crates//:uuid",
     ],
-    visibility = ["//visibility:public"],
 )
 
-# ============================================================================
-# Binario del Servidor RBE
-# ============================================================================
-
 rust_binary(
-    name = "rbe-server",
+    name = "server",
     srcs = glob(
         ["src/**/*.rs"],
         exclude = ["src/bin/**"],
@@ -106,6 +79,7 @@ rust_binary(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":build_script",
         "@crates//:ahash",
@@ -135,15 +109,10 @@ rust_binary(
         "@crates//:tracing-subscriber",
         "@crates//:uuid",
     ],
-    visibility = ["//visibility:public"],
 )
 
-# ============================================================================
-# Binario del Worker RBE
-# ============================================================================
-
 rust_binary(
-    name = "rbe-worker",
+    name = "worker",
     srcs = glob(
         ["src/bin/**/*.rs"],
     ),
@@ -153,6 +122,7 @@ rust_binary(
     proc_macro_deps = [
         "@crates//:async-trait",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":build_script",
         ":rbe_lib",
@@ -181,28 +151,34 @@ rust_binary(
         "@crates//:tracing-subscriber",
         "@crates//:uuid",
     ],
-    visibility = ["//visibility:public"],
 )
 
-# ============================================================================
-# Alias para facilitar la compilación
-# ============================================================================
-
-alias(
-    name = "server",
-    actual = ":rbe-server",
+rust_binary(
+    name = "cache",
+    srcs = ["src/bin/cache.rs"],
+    compile_data = [":build_script"],
+    crate_root = "src/bin/cache.rs",
+    edition = "2021",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
     visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        ":rbe_lib",
+        "@crates//:anyhow",
+        "@crates//:tokio",
+        "@crates//:tonic",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+    ],
 )
 
-alias(
-    name = "worker",
-    actual = ":rbe-worker",
+rust_doc(
+    name = "rbe_lib_doc",
+    crate = ":rbe_lib",
     visibility = ["//visibility:public"],
 )
-
-# ============================================================================
-# Tests
-# ============================================================================
 
 rust_test(
     name = "rbe_lib_test",
@@ -243,15 +219,12 @@ rust_test(
     ],
 )
 
-# ============================================================================
-# Target para compilar todo
-# ============================================================================
-
 filegroup(
     name = "all",
     srcs = [
-        ":rbe-server",
-        ":rbe-worker",
+        ":cache",
+        ":server",
+        ":worker",
     ],
     visibility = ["//visibility:public"],
 )

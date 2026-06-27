@@ -5,5 +5,3 @@ module(
     version = "1.0.0",
     compatibility_level = 1,
 )
-
-# No dependencies needed for genrule tests

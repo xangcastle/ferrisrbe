@@ -193,7 +193,7 @@ message RegistrationAck {
 }
 
 message ServerConfig {
-    // Endpoint del CAS (bazel-remote)
+    // Endpoint del CAS (rbe-cache)
     string cas_endpoint = 1;
     
     // Intervalo de heartbeat en segundos

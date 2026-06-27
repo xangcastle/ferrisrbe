@@ -122,7 +122,7 @@ impl ResilientWorkerConfig {
                 .unwrap_or_else(|_| "http://rbe-server:9092".to_string()),
             worker_type: std::env::var("WORKER_TYPE").unwrap_or_else(|_| "default".to_string()),
             cas_endpoint: std::env::var("CAS_ENDPOINT")
-                .unwrap_or_else(|_| "http://bazel-remote:9094".to_string()),
+                .unwrap_or_else(|_| "http://rbe-cache:9094".to_string()),
             labels: std::env::var("WORKER_LABELS")
                 .map(|s| s.split(',').map(|s| s.to_string()).collect())
                 .unwrap_or_else(|_| vec!["os=linux".to_string(), "arch=amd64".to_string()]),
@@ -153,7 +153,7 @@ impl ResilientRbeWorker {
         tokio::fs::create_dir_all(&cas_cache_dir).await?;
 
         let cas_endpoint =
-            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "bazel-remote:9094".to_string());
+            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "rbe-cache:9094".to_string());
         let cas_backend: Arc<dyn CasBackend> = Arc::new(GrpcCasBackend::new(&cas_endpoint).await?);
 
         let materializer = Arc::new(Materializer::new(
@@ -631,16 +631,23 @@ impl ResilientRbeWorker {
         } else {
             // Reject absolute paths to executables outside the workspace as a basic
             // sandbox measure. Relative commands are resolved via PATH.
+            // For local development, set RBE_ALLOW_SYSTEM_EXECUTABLES=1 to allow
+            // trusted system paths such as /bin/bash.
             let program = &assignment.command[0];
             let program_path = Path::new(program);
-            if program_path.is_absolute() && !program_path.starts_with(&exec_dir) {
+            let allow_system_executables =
+                std::env::var("RBE_ALLOW_SYSTEM_EXECUTABLES").is_ok_and(|v| v == "1");
+            if program_path.is_absolute()
+                && !program_path.starts_with(&exec_dir)
+                && !allow_system_executables
+            {
                 return ProtoExecutionResult {
                     execution_id,
                     worker_id: self.config.worker_id.clone(),
                     exit_code: -1,
                     stdout: vec![],
                     stderr: format!(
-                        "Sandbox violation: absolute executable '{}' outside workspace is not allowed",
+                        "Sandbox violation: absolute executable '{}' outside workspace is not allowed (set RBE_ALLOW_SYSTEM_EXECUTABLES=1 for local dev)",
                         program
                     )
                     .into_bytes(),

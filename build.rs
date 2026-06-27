@@ -136,16 +136,10 @@ fn main() -> Result<()> {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(
-            &[worker_proto.to_str().unwrap()],
-            &[proto_include.to_str().unwrap()],
-        )?;
-
-    tonic_build::configure()
-        .build_server(true)
-        .build_client(true)
+        .disable_comments(".")
         .compile_protos(
             &[
+                worker_proto.to_str().unwrap(),
                 remote_execution_proto.to_str().unwrap(),
                 semver_proto.to_str().unwrap(),
                 wrappers_proto.to_str().unwrap(),

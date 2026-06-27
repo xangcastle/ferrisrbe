@@ -71,7 +71,7 @@ helm install ferrisrbe ./charts/ferrisrbe \
 |-----------|-------------|-----------|----------------|--------------|
 | Server | 100m | 500m | 256Mi | 1Gi |
 | Worker | 500m | 2000m | 1Gi | 4Gi |
-| bazel-remote | 500m | 2000m | 2Gi | 8Gi |
+| rbe-cache | 500m | 2000m | 2Gi | 8Gi |
 
 ### High Availability
 
@@ -101,32 +101,37 @@ server:
     certSecret: rbe-tls-cert
 ```
 
-## Docker Compose (Local Testing)
+## Podman Compose (Local Testing)
 
-```yaml
-version: '3.8'
-services:
-  server:
-    image: xangcastle/ferris-server:latest
-    ports:
-      - "9092:9092"
-    environment:
-      - RBE_PORT=9092
-      - CAS_ENDPOINT=bazel-remote:9094
-  
-  worker:
-    image: xangcastle/ferris-worker:latest
-    environment:
-      - SERVER_ENDPOINT=http://server:9092
-      - CAS_ENDPOINT=http://bazel-remote:9094
-    depends_on:
-      - server
-  
-  bazel-remote:
-    image: buchgr/bazel-remote-cache:latest
-    ports:
-      - "9094:9094"
+Local stack with workers, cache, and execution. Images are built with Bazel and loaded into Podman.
+
+```bash
+# Build and load images
+bazel run //oci:server_load
+bazel run //oci:worker_load
+bazel run //oci:cache_load
+
+# Start the stack
+podman-compose -f podman-compose.yml up -d
+
+# View logs
+podman-compose -f podman-compose.yml logs -f
+
+# Stop
+podman-compose -f podman-compose.yml down
 ```
+
+The compose file references locally built images:
+
+- `ferrisrbe/server:latest`
+- `ferrisrbe/worker:latest`
+- `ferrisrbe/cache:latest`
+
+Exposed ports:
+
+- `localhost:9092` - RBE Server gRPC
+- `localhost:9094` - CAS gRPC
+- `localhost:8080` - CAS HTTP
 
 ## Verification
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Local Benchmark Script
 # Run benchmarks locally without CI dependencies
-# Supports Docker for bazel-remote or local binary
+# Supports Docker for rbe-cache or local binary
 
 set -e
 
@@ -57,30 +57,63 @@ check_prerequisites() {
     log_success "Prerequisites OK"
 }
 
-# Start bazel-remote using Docker (preferred) or local binary
+# Default cache image for the local benchmark (built and loaded by Bazel).
+# Override with RBE_CACHE_IMAGE to use a different image.
+RBE_CACHE_IMAGE="${RBE_CACHE_IMAGE:-ferrisrbe/cache:latest}"
+
+# Build the rbe-cache OCI image using Bazel and load it into Docker.
+build_cache_image_with_bazel() {
+    if ! command -v bazel &> /dev/null; then
+        return 1
+    fi
+
+    local target="//oci:cache_load"
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) target="//oci:cache_load_amd64" ;;
+        arm64|aarch64) target="//oci:cache_load" ;;
+    esac
+
+    log_info "Building rbe-cache image with Bazel ($target)..."
+    cd "$PROJECT_ROOT"
+    bazel run "$target"
+}
+
+# Start rbe-cache using Docker (preferred) or local binary
 start_cas() {
-    log_info "Starting CAS (bazel-remote)..."
-    
+    log_info "Starting CAS (rbe-cache)..."
+
     # Check if already running
     if nc -z localhost 9094 2>/dev/null; then
         log_success "CAS already running on port 9094"
         return 0
     fi
-    
+
     # Try Docker first
     if command -v docker &> /dev/null; then
-        log_info "Starting bazel-remote via Docker..."
+        # Build the image with Bazel if it isn't available locally yet.
+        if ! docker image inspect "$RBE_CACHE_IMAGE" >/dev/null 2>&1; then
+            log_info "Cache image $RBE_CACHE_IMAGE not found locally."
+            if ! build_cache_image_with_bazel; then
+                log_warn "Could not build image with Bazel, trying local binary..."
+            fi
+        fi
+
+        log_info "Starting rbe-cache via Docker ($RBE_CACHE_IMAGE)..."
         docker run -d \
             --name ferrisrbe-benchmark-cas \
             -p 9094:9094 \
             -p 8080:8080 \
-            -v "$RESULTS_DIR/bazel-remote-cache:/data" \
-            -e BAZEL_REMOTE_GRPC_PORT=9094 \
-            -e BAZEL_REMOTE_HTTP_PORT=8080 \
-            -e BAZEL_REMOTE_DIR=/data \
-            -e BAZEL_REMOTE_MAX_SIZE=1 \
-            buchgr/bazel-remote-cache:latest 2>/dev/null && {
-            
+            -v "$RESULTS_DIR/rbe-cache-data:/data" \
+            -e RUST_LOG=info \
+            -e RBE_CACHE_PORT=9094 \
+            -e RBE_CACHE_HTTP_PORT=8080 \
+            -e RBE_CACHE_DIR=/data \
+            -e RBE_CACHE_MAX_SIZE_GB=1 \
+            -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
+            "$RBE_CACHE_IMAGE" 2>/dev/null && {
+
             # Wait for it to be ready
             for i in {1..30}; do
                 if nc -z localhost 9094 2>/dev/null; then
@@ -90,48 +123,50 @@ start_cas() {
                 sleep 1
             done
         }
-        
+
         log_warn "Docker failed to start CAS, trying local binary..."
         docker rm -f ferrisrbe-benchmark-cas 2>/dev/null || true
     fi
-    
+
     # Try local binary
-    if command -v bazel-remote &> /dev/null; then
-        log_info "Starting bazel-remote via local binary..."
-        mkdir -p "$RESULTS_DIR/bazel-remote-cache"
-        bazel-remote \
-            --dir="$RESULTS_DIR/bazel-remote-cache" \
-            --port=9094 \
-            --grpc_port=9094 &
-        BAZEL_REMOTE_PID=$!
-        
+    if command -v rbe-cache &> /dev/null; then
+        log_info "Starting rbe-cache via local binary..."
+        mkdir -p "$RESULTS_DIR/rbe-cache-data"
+        RBE_CACHE_PORT=9094 \
+        RBE_CACHE_HTTP_PORT=8080 \
+        RBE_CACHE_DIR="$RESULTS_DIR/rbe-cache-data" \
+        RBE_CACHE_MAX_SIZE_GB=1 \
+        RBE_CACHE_AC_MAX_SIZE_GB=1 \
+        rbe-cache &
+        RBE_CACHE_PID=$!
+
         # Wait for it to be ready
         for i in {1..30}; do
             if nc -z localhost 9094 2>/dev/null; then
-                log_success "CAS ready (local binary, PID: $BAZEL_REMOTE_PID)"
+                log_success "CAS ready (local binary, PID: $RBE_CACHE_PID)"
                 return 0
             fi
             sleep 1
         done
-        
+
         log_warn "Local binary failed to start CAS"
-        kill $BAZEL_REMOTE_PID 2>/dev/null || true
+        kill $RBE_CACHE_PID 2>/dev/null || true
     fi
-    
+
     log_error "Could not start CAS. Please install one of:"
-    log_error "  - Docker: https://docs.docker.com/get-docker/"
-    log_error "  - bazel-remote: https://github.com/buchgr/bazel-remote#readme"
+    log_error "  - Docker/Podman: https://docs.docker.com/get-docker/"
+    log_error "  - Build rbe-cache locally: bazel build //:rbe-cache"
     exit 1
 }
 
 # Stop CAS
 stop_cas() {
-    if [ -n "$BAZEL_REMOTE_PID" ]; then
-        log_info "Stopping local bazel-remote..."
-        kill $BAZEL_REMOTE_PID 2>/dev/null || true
-        wait $BAZEL_REMOTE_PID 2>/dev/null || true
+    if [ -n "$RBE_CACHE_PID" ]; then
+        log_info "Stopping local rbe-cache..."
+        kill $RBE_CACHE_PID 2>/dev/null || true
+        wait $RBE_CACHE_PID 2>/dev/null || true
     fi
-    
+
     # Also stop Docker container if we started it
     if command -v docker &> /dev/null; then
         docker rm -f ferrisrbe-benchmark-cas 2>/dev/null || true
@@ -140,13 +175,7 @@ stop_cas() {
 
 # Get server binary
 get_server_binary() {
-    # Try cargo build first
-    if [ -f "$PROJECT_ROOT/target/release/rbe-server" ]; then
-        echo "$PROJECT_ROOT/target/release/rbe-server"
-        return 0
-    fi
-    
-    # Try Bazel
+    # Try Bazel output first
     local bazel_bin=$(get_bazel_bin "$PROJECT_ROOT" 2>/dev/null)
     if [ -n "$bazel_bin" ] && [ -f "$bazel_bin/rbe-server" ]; then
         echo "$bazel_bin/rbe-server"
@@ -164,14 +193,11 @@ build_server() {
     
     cd "$PROJECT_ROOT"
     
-    if command -v cargo &> /dev/null; then
-        log_info "Building with Cargo..."
-        cargo build --release --bin rbe-server
-    elif command -v bazel &> /dev/null; then
+    if command -v bazel &> /dev/null; then
         log_info "Building with Bazel..."
         bazel build //:rbe-server --config=release
     else
-        log_error "Neither Cargo nor Bazel found. Cannot build."
+        log_error "Bazel not found. Please install Bazelisk."
         exit 1
     fi
     

@@ -34,8 +34,7 @@ Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ m
 
 Deploy complete Remote Build Execution infrastructure with one click:
 - **RBE Server** - gRPC API for cache and execution  
-- **bazel-remote** - CAS (Content Addressable Storage)
-- **Redis** - Metadata store
+- **rbe-cache** - Native cache server (CAS + ActionCache)
 - **Workers** - Build executors
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/rxPtfg?referralCode=yQR-JU&utm_medium=integration&utm_source=template&utm_campaign=generic)
@@ -49,30 +48,30 @@ echo 'build:remote --remote_default_exec_properties=OSFamily=linux' >> ~/.bazelr
 bazel build --config=remote //...
 ```
 
-### Option 2: Cloud Development Environments
-
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/xangcastle/ferrisrbe?quickstart=1)
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/xangcastle/ferrisrbe)
-
-### Option 3: Docker Compose (Full RBE - Local)
+### Option 2: Podman Compose (Full RBE - Local)
 
 Complete RBE stack with workers, cache, and execution on your machine.
 
 ```bash
 git clone https://github.com/xangcastle/ferrisrbe.git
 cd ferrisrbe
-docker-compose up -d
+
+# Build and load images with Bazel
+bazel run //oci:load_all
+
+# Start the stack with Podman Compose
+podman-compose -f podman-compose.yml up -d
 
 # Verify the container is running and healthy
 curl -I http://localhost:9092 || echo "Server is up"
 
 # Configure Bazel
 echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
-echo 'build:remote --remote_cache=grpc://localhost:9092' >> ~/.bazelrc
+echo 'build:remote --remote_cache=grpc://localhost:9094' >> ~/.bazelrc
 bazel build --config=remote //...
 ```
 
-### Option 4: Kubernetes (Production)
+### Option 3: Kubernetes (Production)
 
 ```bash
 # Helm install
@@ -109,12 +108,12 @@ FerrisRBE implements a tiered caching strategy:
 │  - Microsecond-level reads (~50-100μs)                      │
 │  - Lost on server restart                                   │
 ├─────────────────────────────────────────────────────────────┤
-│  L2 Cache: Redis/Memcached (planned)                        │
+│  L2 Cache: rbe-cache DiskActionCache                        │
 │  - Persistent across restarts                               │
 │  - Shared across server replicas                            │
 │  - Millisecond-level reads (~1-3ms)                         │
 ├─────────────────────────────────────────────────────────────┤
-│  L3 Storage: CAS (bazel-remote)                             │
+│  L3 Storage: CAS (rbe-cache)                                │
 │  - Persistent blob storage                                  │
 │  - Gigabyte-scale artifacts                                 │
 └─────────────────────────────────────────────────────────────┘
@@ -196,7 +195,7 @@ cd benchmark
 # 2. Execution API throughput (Zero-GC advantage)
 ./scripts/execution-load-test.py --actions 1000 --concurrent 50
 
-# 3. Action Cache performance (DashMap vs Redis)
+# 3. Action Cache performance (L1 DashMap + L2 disk-backed)
 ./scripts/action-cache-test.py --operations 10000 --concurrent 100
 
 # 4. Multi-level scheduler (no head-of-line blocking)
@@ -304,8 +303,8 @@ ferrisrbe/
 
 ### In Progress 🚧
 
-- [ ] Persistent L2 Cache integration (Redis/Memcached)
-  - *Why: Current L1 cache (DashMap) is in-memory only. L2 provides persistence across server restarts and cache sharing across multiple server replicas.*
+- [x] Persistent L2 Cache (disk-backed ActionCache in rbe-cache)
+  - *Implemented: DiskActionCache provides persistence across server restarts and cache sharing across multiple server replicas.*
 - [ ] Prometheus / OpenTelemetry metrics exposition
   - *Why: Production observability for SRE teams*
 

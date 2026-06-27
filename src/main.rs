@@ -94,8 +94,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use cache::L1ActionCache;
-    use execution::{ExecutionStage, ExecutionStateMachine, MultiLevelScheduler};
+    use cache::action_cache::L1ActionCache;
+    use execution::scheduler::MultiLevelScheduler;
+    use execution::state_machine::{ExecutionStage, ExecutionStateMachine};
     use types::DigestInfo;
 
     #[test]
@@ -118,7 +119,11 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_state_machine_full_flow() {
-        let digest = DigestInfo::new("test_action", 2048);
+        let digest = DigestInfo::new(
+            "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae",
+            2048,
+        )
+        .unwrap();
         let op_id = execution::state_machine::OperationId::generate();
         let sm = ExecutionStateMachine::new(op_id, digest);
 
@@ -139,7 +144,14 @@ mod integration_tests {
         let map: DashMap<DigestInfo, String, ahash::RandomState> =
             DashMap::with_capacity_and_hasher_and_shard_amount(1000, ahash::RandomState::new(), 64);
 
-        map.insert(DigestInfo::new("test", 1024), "value".to_string());
+        map.insert(
+            DigestInfo::new(
+                "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae",
+                1024,
+            )
+            .unwrap(),
+            "value".to_string(),
+        );
         assert_eq!(map.len(), 1);
     }
 }

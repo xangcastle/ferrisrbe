@@ -1,30 +1,38 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: bazel-remote
+  name: rbe-cache
   namespace: rbe
   labels:
-    app: bazel-remote
+    app: rbe-cache
 spec:
-  serviceName: bazel-remote
+  serviceName: rbe-cache
   replicas: 1
   selector:
     matchLabels:
-      app: bazel-remote
+      app: rbe-cache
   template:
     metadata:
       labels:
-        app: bazel-remote
+        app: rbe-cache
     spec:
       enableServiceLinks: false
       containers:
-        - name: bazel-remote
-          image: buchgr/bazel-remote-cache:latest
-          args:
-            - --max_size=100
-            - --dir=/data
-            - --grpc_address=:9094
-            - --http_address=:8080
+        - name: rbe-cache
+          image: ferrisrbe/cache:latest
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: RBE_CACHE_PORT
+              value: "9094"
+            - name: RBE_CACHE_HTTP_PORT
+              value: "8080"
+            - name: RBE_CACHE_DIR
+              value: "/data"
+            - name: RBE_CACHE_MAX_SIZE_GB
+              value: "100"
+            - name: RBE_CACHE_AC_MAX_SIZE_GB
+              value: "10"
           ports:
             - name: grpc
               containerPort: 9094
@@ -64,10 +72,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: bazel-remote
+  name: rbe-cache
   namespace: rbe
   labels:
-    app: bazel-remote
+    app: rbe-cache
 spec:
   type: ClusterIP
   ports:
@@ -80,4 +88,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app: bazel-remote
+    app: rbe-cache

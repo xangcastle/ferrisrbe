@@ -178,7 +178,7 @@ impl WorkerService for WorkerServiceImpl {
                                 message: "Worker registered successfully".to_string(),
                                 config: Some(crate::proto::ferris::rbe::worker::ServerConfig {
                                     cas_endpoint: std::env::var("CAS_ENDPOINT")
-                                        .unwrap_or_else(|_| "bazel-remote:9094".to_string()),
+                                        .unwrap_or_else(|_| "rbe-cache:9094".to_string()),
                                     heartbeat_interval_sec: 30,
                                 }),
                             })),

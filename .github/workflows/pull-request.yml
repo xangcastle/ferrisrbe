@@ -6,9 +6,6 @@ on:
   push:
     branches: [main, master]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   format:
     name: Format
@@ -22,7 +19,31 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: rustfmt --edition 2021 --check $(find src -name "*.rs")
+
+  no-cargo:
+    name: No Cargo in Scripts/Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for cargo usage in scripts and docs
+        run: |
+          # Search for cargo commands in user-facing scripts/docs.
+          # Allowed exceptions: Cargo.toml/Cargo.lock themselves, deny.toml,
+          # dependabot config, build.rs cargo directives, and Bazel crate_universe files.
+          matches=$(grep -REn 'cargo[[:space:]]+(run|build|test|check|clippy|fmt|update|install|binstall)([[:space:]]|$)|cargo$' \
+            --include='*.sh' --include='*.md' --include='*.yml' --include='*.yaml' \
+            scripts docs benchmark/scripts src/version README.md AGENTS.md || true)
+
+          if [ -n "$matches" ]; then
+            echo "❌ Found direct cargo usage in scripts/docs:"
+            echo "$matches"
+            echo ""
+            echo "FerrisRBE builds only with Bazel. Cargo.toml/Cargo.lock are inputs for crate_universe."
+            exit 1
+          fi
+          echo "✅ No direct cargo usage found in scripts/docs."
 
   lint:
     name: Lint
@@ -66,11 +87,11 @@ jobs:
 
       - name: Build binaries
         run: |
-          bazel build //:rbe-server //:rbe-worker
+          bazel build //:rbe-server //:rbe-worker //:rbe-cache
 
       - name: Build container images
         run: |
-          bazel build //oci:server_image_amd64 //oci:worker_image_amd64
+          bazel build //oci:server_image_amd64 //oci:worker_image_amd64 //oci:cache_image_amd64
 
 
 
@@ -126,6 +147,7 @@ jobs:
           # Build and load AMD64 images for CI (GitHub Actions is AMD64)
           bazel run //oci:server_load_amd64
           bazel run //oci:worker_load_amd64
+          bazel run //oci:cache_load_amd64
           
           echo "=== Docker images ==="
           docker images | grep ferrisrbe || true
@@ -136,6 +158,7 @@ jobs:
         run: |
           kind load docker-image ferrisrbe/server:latest --name ferrisrbe-test
           kind load docker-image ferrisrbe/worker:latest --name ferrisrbe-test
+          kind load docker-image ferrisrbe/cache:latest --name ferrisrbe-test
           echo "=== Verify images in Kind ==="
           kubectl get nodes -o json | jq -r '.items[0].status.images[] | select(.names[] | contains("ferrisrbe")) | .names[0]' || true
 
@@ -146,6 +169,8 @@ jobs:
             --set server.image.pullPolicy=Never \
             --set worker.image.repository=ferrisrbe/worker \
             --set worker.image.pullPolicy=Never \
+            --set cache.image.repository=ferrisrbe/cache \
+            --set cache.image.pullPolicy=Never \
             --set server.livenessProbe.enabled=false \
             --set server.readinessProbe.enabled=false \
             --set worker.livenessProbe.enabled=false \
@@ -169,8 +194,7 @@ jobs:
 
       - name: Wait for deployment
         run: |
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=redis -n rbe --timeout=60s
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=bazel-remote -n rbe --timeout=60s
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=cache -n rbe --timeout=60s
           kubectl rollout status deployment/ferrisrbe-server -n rbe --timeout=120s || {
             echo "=== Server deployment failed ==="
             kubectl get pods -n rbe
@@ -193,7 +217,7 @@ jobs:
       - name: Port forward
         run: |
           kubectl port-forward -n rbe svc/ferrisrbe-server 9092:9092 &
-          kubectl port-forward -n rbe svc/ferrisrbe-bazel-remote 9094:9094 &
+          kubectl port-forward -n rbe svc/ferrisrbe-cache 9094:9094 &
           echo "Waiting for port-forward to be ready..."
           sleep 10
           # Verify ports are listening

@@ -325,62 +325,17 @@ impl Execution for ExecutionService {
             if let Some(cached_result) = self.l1_cache.get(&digest_info) {
                 info!("Cache hit for action {}", digest_info);
 
+                let exit_code = cached_result.proto.exit_code;
                 #[allow(deprecated)]
                 let exec_response = ExecuteResponse {
-                    result: Some(ActionResult {
-                        output_files: cached_result
-                            .output_files
-                            .iter()
-                            .map(|f| OutputFile {
-                                path: f.path.clone(),
-                                digest: Some(Digest {
-                                    hash: f.digest.hash_to_string(),
-                                    size_bytes: f.digest.size,
-                                }),
-                                is_executable: f.is_executable,
-                                contents: vec![],
-                                node_properties: None,
-                            })
-                            .collect(),
-                        output_directories: cached_result
-                            .output_directories
-                            .iter()
-                            .map(|d| {
-                                let digest = &d.tree_digest;
-                                OutputDirectory {
-                                    path: d.path.clone(),
-                                    tree_digest: Some(Digest {
-                                        hash: digest.hash_to_string(),
-                                        size_bytes: digest.size,
-                                    }),
-                                    is_topologically_sorted: false,
-                                    root_directory_digest: None,
-                                }
-                            })
-                            .collect(),
-                        exit_code: cached_result.exit_code,
-                        stdout_raw: vec![],
-                        stdout_digest: cached_result.stdout_digest.map(|d| Digest {
-                            hash: d.hash_to_string(),
-                            size_bytes: d.size,
-                        }),
-                        stderr_raw: vec![],
-                        stderr_digest: cached_result.stderr_digest.map(|d| Digest {
-                            hash: d.hash_to_string(),
-                            size_bytes: d.size,
-                        }),
-                        execution_metadata: None,
-                        output_file_symlinks: vec![],
-                        output_symlinks: vec![],
-                        output_directory_symlinks: vec![],
-                    }),
+                    result: Some(cached_result.proto.clone()),
                     cached_result: true,
                     status: Some(RpcStatus {
-                        code: if cached_result.exit_code == 0 { 0 } else { 1 },
-                        message: if cached_result.exit_code == 0 {
+                        code: if exit_code == 0 { 0 } else { 1 },
+                        message: if exit_code == 0 {
                             "OK (cached)".to_string()
                         } else {
-                            format!("Exit code: {} (cached)", cached_result.exit_code)
+                            format!("Exit code: {} (cached)", exit_code)
                         },
                         details: vec![],
                     }),

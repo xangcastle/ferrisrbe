@@ -7,15 +7,10 @@ data:
   # RBE Server configuration
   RBE_PORT: "9092"
   RBE_LOG_LEVEL: "info"
-  RBE_WORKER_SERVICE: "rbe-worker:9093"
   
   # CAS (Content Addressable Storage)
-  CAS_ENDPOINT: "bazel-remote:9094"
+  CAS_ENDPOINT: "rbe-cache:9094"
   CAS_MAX_BATCH_SIZE: "4194304"
-  
-  # Action Cache
-  CACHE_TYPE: "redis"
-  REDIS_ENDPOINT: "redis:6379"
   
   # Worker defaults
   WORKER_TYPE: "default"

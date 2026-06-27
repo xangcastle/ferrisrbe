@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[lib]
+name = "rbe_server"
+path = "src/lib.rs"
+doctest = false
+
 [[bin]]
 name = "rbe-server"
 path = "src/main.rs"
@@ -11,6 +16,10 @@ path = "src/main.rs"
 [[bin]]
 name = "rbe-worker"
 path = "src/bin/worker.rs"
+
+[[bin]]
+name = "rbe-cache"
+path = "src/bin/cache.rs"
 
 [dependencies]
 tonic = { version = "0.12", features = ["tls"] }

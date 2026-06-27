@@ -7,13 +7,13 @@ por el cargo_build_script en el BUILD.bazel raíz.
 # Exportar todos los archivos proto para que puedan ser referenciados
 # desde el cargo_build_script
 exports_files(
-    glob(["**/*.proto"]),
+    glob(["*.proto", "**/*.proto"]),
     visibility = ["//visibility:public"],
 )
 
 # Filegroup con todos los archivos proto
 filegroup(
     name = "all_protos",
-    srcs = glob(["**/*.proto"]),
+    srcs = glob(["*.proto", "**/*.proto"]),
     visibility = ["//visibility:public"],
 )

@@ -341,7 +341,7 @@ $(if [ "$overall_status" = "✅ PASS" ]; then echo "All benchmarks passing. No a
 Some benchmarks did not complete or data is missing. Check:
 - Container logs for errors
 - Test connectivity to localhost:9092
-- Required services (bazel-remote) are running"; fi)
+- Required services (rbe-cache) are running"; fi)
 
 ---
 

@@ -57,13 +57,13 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Wait for bazel-remote if using GitHub Actions services
+# Wait for rbe-cache if using GitHub Actions services
 wait_for_services() {
     if [ -n "$BENCHMARK_SERVICES" ]; then
-        log_info "Waiting for bazel-remote service..."
+        log_info "Waiting for rbe-cache service..."
         for i in {1..60}; do
             if nc -z localhost 9094 2>/dev/null; then
-                log_success "bazel-remote is ready on port 9094"
+                log_success "rbe-cache is ready on port 9094"
                 break
             fi
             if [ $((i % 10)) -eq 0 ]; then

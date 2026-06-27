@@ -6,13 +6,20 @@
 //!
 //! Directory structure: `<root>/aa/bb/aabbccdd...`
 //! where `aa` is the first 2 hex chars of the hash and `bb` is the next 2.
+//!
+//! Supports a configurable maximum size with LRU eviction so it can be used
+//! as a drop-in replacement for `bazel-remote-cache`.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use parking_lot::Mutex;
 use sha2::{Digest as Sha2Digest, Sha256};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::UNIX_EPOCH;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tracing::{debug, error, info, warn};
@@ -20,27 +27,168 @@ use tracing::{debug, error, info, warn};
 use crate::cas::{CasBackend, CasError, CasResult};
 use crate::types::DigestInfo;
 
+/// Default maximum cache size in GiB when none is configured.
+const DEFAULT_MAX_SIZE_GB: u64 = 100;
+
+/// In-memory LRU bookkeeping for disk blobs.
+struct LruState {
+    /// Ordered map counter -> digest. Smallest counter is the oldest.
+    order: BTreeMap<u64, DigestInfo>,
+    /// digest -> counter
+    positions: HashMap<DigestInfo, u64>,
+    /// digest -> size in bytes
+    sizes: HashMap<DigestInfo, u64>,
+    /// Monotonically increasing access counter.
+    next_counter: u64,
+}
+
+impl LruState {
+    fn new() -> Self {
+        Self {
+            order: BTreeMap::new(),
+            positions: HashMap::new(),
+            sizes: HashMap::new(),
+            next_counter: 1,
+        }
+    }
+
+    fn touch(&mut self, digest: DigestInfo, size: u64) {
+        if let Some(old_counter) = self.positions.remove(&digest) {
+            self.order.remove(&old_counter);
+        }
+        let counter = self.next_counter;
+        self.next_counter += 1;
+        self.order.insert(counter, digest);
+        self.positions.insert(digest, counter);
+        self.sizes.insert(digest, size);
+    }
+
+    fn remove(&mut self, digest: DigestInfo) -> Option<u64> {
+        let counter = self.positions.remove(&digest)?;
+        self.order.remove(&counter);
+        self.sizes.remove(&digest)
+    }
+
+    /// Returns digests to evict, oldest first, until `free_bytes` have been
+    /// freed or no more entries exist.
+    fn evict(&mut self, mut free_bytes: u64) -> Vec<(DigestInfo, u64)> {
+        let mut removed = Vec::new();
+        while free_bytes > 0 {
+            let Some((counter, digest)) = self.order.first_key_value().map(|(k, v)| (*k, *v))
+            else {
+                break;
+            };
+            let size = self.sizes.get(&digest).copied().unwrap_or(0);
+            self.order.remove(&counter);
+            self.positions.remove(&digest);
+            self.sizes.remove(&digest);
+            removed.push((digest, size));
+            free_bytes = free_bytes.saturating_sub(size);
+        }
+        removed
+    }
+}
+
 /// Disk-based CAS backend
 pub struct DiskBackend {
     /// Root directory for blob storage
     root: PathBuf,
     /// Directory for temporary files during writes
     temp_dir: PathBuf,
+    /// Maximum total size in bytes (0 means unlimited)
+    max_size_bytes: u64,
+    /// Current total size in bytes
+    current_size_bytes: AtomicU64,
+    /// LRU state
+    lru: Mutex<LruState>,
 }
 
 impl DiskBackend {
-    /// Create a new disk backend with the given root directory
-    #[allow(dead_code)]
+    /// Create a new disk backend with the given root directory and default
+    /// maximum size.
     pub async fn new(root: impl AsRef<Path>) -> CasResult<Self> {
+        Self::with_max_size(root, DEFAULT_MAX_SIZE_GB).await
+    }
+
+    /// Create a new disk backend with a maximum size in GiB.
+    pub async fn with_max_size(root: impl AsRef<Path>, max_size_gb: u64) -> CasResult<Self> {
+        Self::with_max_size_bytes(root, max_size_gb * 1024 * 1024 * 1024).await
+    }
+
+    /// Create a new disk backend with a maximum size in bytes.
+    pub async fn with_max_size_bytes(
+        root: impl AsRef<Path>,
+        max_size_bytes: u64,
+    ) -> CasResult<Self> {
         let root = root.as_ref().to_path_buf();
         let temp_dir = root.join(".tmp");
 
         fs::create_dir_all(&root).await?;
         fs::create_dir_all(&temp_dir).await?;
 
-        info!("Initialized DiskBackend at {:?}", root);
+        let mut lru = LruState::new();
+        let mut current_size: u64 = 0;
+        Self::initialize_lru(&root, &mut lru, &mut current_size).await?;
 
-        Ok(Self { root, temp_dir })
+        info!(
+            "Initialized DiskBackend at {:?}: size={} bytes, max={} bytes",
+            root, current_size, max_size_bytes
+        );
+
+        Ok(Self {
+            root,
+            temp_dir,
+            max_size_bytes,
+            current_size_bytes: AtomicU64::new(current_size),
+            lru: Mutex::new(lru),
+        })
+    }
+
+    async fn initialize_lru(
+        root: &Path,
+        lru: &mut LruState,
+        current_size: &mut u64,
+    ) -> CasResult<()> {
+        Self::initialize_lru_dir(root, root, lru, current_size).await
+    }
+
+    async fn initialize_lru_dir(
+        root: &Path,
+        dir: &Path,
+        lru: &mut LruState,
+        current_size: &mut u64,
+    ) -> CasResult<()> {
+        let mut entries = fs::read_dir(dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if file_name.starts_with('.') {
+                // Skip hidden files/directories such as .tmp.
+                continue;
+            }
+            if path.is_dir() {
+                Box::pin(Self::initialize_lru_dir(root, &path, lru, current_size)).await?;
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let Some(digest) = Self::digest_from_path(root, &path) else {
+                continue;
+            };
+            let metadata = fs::metadata(&path).await?;
+            let size = metadata.len();
+            let mtime = metadata
+                .modified()
+                .unwrap_or(UNIX_EPOCH)
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            lru.next_counter = lru.next_counter.max(mtime + 1);
+            lru.touch(digest, size);
+            *current_size += size;
+        }
+        Ok(())
     }
 
     /// Compute the storage path for a digest
@@ -57,6 +205,27 @@ impl DiskBackend {
         let remainder = &hash[4..];
 
         self.root.join(prefix1).join(prefix2).join(remainder)
+    }
+
+    fn digest_from_path(root: &Path, path: &Path) -> Option<DigestInfo> {
+        let rel = path.strip_prefix(root).ok()?;
+        let components: Vec<_> = rel.components().collect();
+        let hash = match components.len() {
+            1 => components[0].as_os_str().to_str()?.to_string(),
+            3 => {
+                let a = components[0].as_os_str().to_str()?;
+                let b = components[1].as_os_str().to_str()?;
+                let c = components[2].as_os_str().to_str()?;
+                format!("{}{}{}", a, b, c)
+            }
+            _ => return None,
+        };
+        if hash.len() != 64 {
+            return None;
+        }
+        // Size is not encoded in the path; use the size stored in the digest
+        // if available, otherwise 0. This is only used for LRU bookkeeping.
+        DigestInfo::new(&hash, 0).ok()
     }
 
     /// Get a temporary file path for atomic writes
@@ -80,23 +249,6 @@ impl DiskBackend {
         hex::encode(hasher.finalize())
     }
 
-    /// Compute SHA256 digest from a stream
-    #[allow(dead_code)]
-    async fn compute_digest_from_stream(
-        mut stream: BoxStream<'static, CasResult<Bytes>>,
-    ) -> CasResult<(String, Vec<u8>)> {
-        let mut hasher = Sha256::new();
-        let mut all_data = Vec::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result?;
-            hasher.update(&chunk);
-            all_data.extend_from_slice(&chunk);
-        }
-
-        Ok((hex::encode(hasher.finalize()), all_data))
-    }
-
     /// Verify that data matches the expected digest
     fn verify_digest(&self, data: &[u8], expected: &DigestInfo) -> CasResult<()> {
         let computed = Self::compute_digest(data);
@@ -105,6 +257,43 @@ impl DiskBackend {
             return Err(CasError::digest_mismatch(&expected_hash, &computed));
         }
         Ok(())
+    }
+
+    fn touch_lru(&self, digest: DigestInfo, size: u64) {
+        let mut lru = self.lru.lock();
+        lru.touch(digest, size);
+    }
+
+    async fn evict_if_needed(&self) {
+        if self.max_size_bytes == 0 {
+            return;
+        }
+        let current = self.current_size_bytes.load(Ordering::Relaxed);
+        if current <= self.max_size_bytes {
+            return;
+        }
+        let to_free = current - self.max_size_bytes;
+        let victims = {
+            let mut lru = self.lru.lock();
+            lru.evict(to_free)
+        };
+        for (digest, size) in victims {
+            let path = self.blob_path(&digest);
+            if fs::remove_file(&path).await.is_ok() {
+                self.current_size_bytes.fetch_sub(size, Ordering::Relaxed);
+                debug!("Evicted CAS blob {:?} ({} bytes)", digest, size);
+            }
+        }
+    }
+
+    /// Return the current total size of stored blobs in bytes.
+    pub fn size_bytes(&self) -> u64 {
+        self.current_size_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Return the configured maximum size in bytes (0 means unlimited).
+    pub fn max_size_bytes(&self) -> u64 {
+        self.max_size_bytes
     }
 }
 
@@ -124,6 +313,7 @@ impl CasBackend for DiskBackend {
                     );
                     return Ok(false);
                 }
+                self.touch_lru(*digest, metadata.len());
                 Ok(true)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -139,8 +329,13 @@ impl CasBackend for DiskBackend {
                 if let Err(e) = self.verify_digest(&data, digest) {
                     error!("Corrupted blob at {:?}: {}", path, e);
                     fs::remove_file(&path).await.ok();
+                    self.current_size_bytes
+                        .fetch_sub(data.len() as u64, Ordering::Relaxed);
+                    let mut lru = self.lru.lock();
+                    lru.remove(*digest);
                     return Ok(None);
                 }
+                self.touch_lru(*digest, data.len() as u64);
                 Ok(Some(Bytes::from(data)))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -159,6 +354,7 @@ impl CasBackend for DiskBackend {
         match fs::metadata(&path).await {
             Ok(metadata) => {
                 let file_size = metadata.len() as usize;
+                self.touch_lru(*digest, metadata.len());
 
                 if offset >= file_size {
                     return Ok(Some(Box::pin(futures::stream::empty())));
@@ -249,8 +445,20 @@ impl CasBackend for DiskBackend {
         file.sync_all().await?;
         drop(file);
 
+        let size = data.len() as u64;
+        if size > self.max_size_bytes && self.max_size_bytes > 0 {
+            fs::remove_file(&temp_path).await.ok();
+            return Err(CasError::Storage(format!(
+                "Blob size {} exceeds max cache size {}",
+                size, self.max_size_bytes
+            )));
+        }
+
         match fs::rename(&temp_path, &final_path).await {
             Ok(()) => {
+                self.current_size_bytes.fetch_add(size, Ordering::Relaxed);
+                self.touch_lru(*digest, size);
+                self.evict_if_needed().await;
                 debug!("Wrote blob {} to {:?}", digest.hash_to_string(), final_path);
                 Ok(())
             }
@@ -293,6 +501,15 @@ impl CasBackend for DiskBackend {
         file.sync_all().await?;
         drop(file);
 
+        let size = total_size as u64;
+        if size > self.max_size_bytes && self.max_size_bytes > 0 {
+            fs::remove_file(&temp_path).await.ok();
+            return Err(CasError::Storage(format!(
+                "Blob size {} exceeds max cache size {}",
+                size, self.max_size_bytes
+            )));
+        }
+
         let computed_hash = hex::encode(hasher.finalize());
         if computed_hash != digest.hash_to_string() {
             fs::remove_file(&temp_path).await.ok();
@@ -312,6 +529,9 @@ impl CasBackend for DiskBackend {
 
         match fs::rename(&temp_path, &final_path).await {
             Ok(()) => {
+                self.current_size_bytes.fetch_add(size, Ordering::Relaxed);
+                self.touch_lru(*digest, size);
+                self.evict_if_needed().await;
                 info!(
                     "Wrote blob {} ({} bytes, expected {} bytes) to {:?}",
                     digest.hash_to_string(),
@@ -330,8 +550,12 @@ impl CasBackend for DiskBackend {
 
     async fn delete(&self, digest: &DigestInfo) -> CasResult<()> {
         let path = self.blob_path(digest);
+        let size = fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
         match fs::remove_file(&path).await {
             Ok(()) => {
+                self.current_size_bytes.fetch_sub(size, Ordering::Relaxed);
+                let mut lru = self.lru.lock();
+                lru.remove(*digest);
                 debug!("Deleted blob {} from {:?}", digest.hash_to_string(), path);
                 Ok(())
             }
@@ -343,7 +567,10 @@ impl CasBackend for DiskBackend {
     async fn local_path(&self, digest: &DigestInfo) -> CasResult<Option<PathBuf>> {
         let path = self.blob_path(digest);
         match fs::metadata(&path).await {
-            Ok(_) => Ok(Some(path)),
+            Ok(metadata) => {
+                self.touch_lru(*digest, metadata.len());
+                Ok(Some(path))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -429,5 +656,32 @@ mod tests {
 
         let result = backend.read(&digest).await.unwrap();
         assert_eq!(result.unwrap().as_ref(), data);
+    }
+
+    #[tokio::test]
+    async fn test_disk_backend_lru_eviction() {
+        let temp_dir = TempDir::new().unwrap();
+        // 1 byte max: writing a second blob must evict the first one.
+        let backend = DiskBackend::with_max_size_bytes(temp_dir.path(), 1)
+            .await
+            .unwrap();
+
+        let data1 = b"1";
+        let digest1 = DigestInfo::from_bytes(data1);
+        backend
+            .write(&digest1, Bytes::from_static(data1))
+            .await
+            .unwrap();
+
+        let data2 = b"2";
+        let digest2 = DigestInfo::from_bytes(data2);
+        backend
+            .write(&digest2, Bytes::from_static(data2))
+            .await
+            .unwrap();
+
+        // digest1 should have been evicted to keep total size <= 1 byte.
+        assert!(!backend.contains(&digest1).await.unwrap());
+        assert!(backend.contains(&digest2).await.unwrap());
     }
 }
