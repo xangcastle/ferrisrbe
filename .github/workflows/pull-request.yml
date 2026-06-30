@@ -65,7 +65,7 @@ jobs:
       - name: Run clippy
         run: |
           bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
-            --output_groups=+clippy_checks //:rbe-server //:rbe-worker 2>&1 || true
+            --output_groups=+clippy_checks //:server //:worker //:cache //:bes 2>&1 || true
         continue-on-error: true
 
   build:
