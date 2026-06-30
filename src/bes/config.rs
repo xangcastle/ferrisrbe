@@ -30,7 +30,8 @@ impl BesConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(9096);
-        let bind_address = std::env::var("RBE_BES_BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
+        let bind_address =
+            std::env::var("RBE_BES_BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
         let data_dir = std::env::var("RBE_BES_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/data/bes"));

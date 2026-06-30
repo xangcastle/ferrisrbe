@@ -52,16 +52,18 @@ impl BesApi {
             .route("/api/targets/{label}", get(get_target_history_handler))
             .route("/api/tests", get(list_tests_handler))
             .route("/api/tests/{label}", get(get_test_history_handler))
-            .fallback_service(
-                ServeDir::new(&self.state.config.static_dir)
-                    .fallback(ServeFile::new(self.state.config.static_dir.join("index.html"))),
-            )
+            .fallback_service(ServeDir::new(&self.state.config.static_dir).fallback(
+                ServeFile::new(self.state.config.static_dir.join("index.html")),
+            ))
             .with_state(state)
     }
 
     /// Run the API server on the configured UI port.
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let addr = format!("{}:{}", self.state.config.bind_address, self.state.config.ui_port);
+        let addr = format!(
+            "{}:{}",
+            self.state.config.bind_address, self.state.config.ui_port
+        );
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         info!("BES UI/API server listening on http://{}", addr);
         axum::serve(listener, self.router()).await?;

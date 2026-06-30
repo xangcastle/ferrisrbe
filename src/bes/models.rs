@@ -85,8 +85,6 @@ pub enum TargetExecutionStatus {
     Cached,
 }
 
-
-
 /// Aggregated view of a target across multiple builds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetSummary {

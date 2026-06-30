@@ -231,11 +231,13 @@ impl BesStorage {
                     .map(|action| (action, event.get("id").cloned()))
             })
             .filter(|(action, _)| {
-                let success = action.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let success = action
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let start = action.get("start_time").and_then(|v| v.as_str());
                 let end = action.get("end_time").and_then(|v| v.as_str());
-                let is_cached =
-                    success && start.is_some() && end.is_some() && start == end;
+                let is_cached = success && start.is_some() && end.is_some() && start == end;
                 !is_cached
             })
             .map(|(action, id)| {
@@ -412,7 +414,11 @@ impl BesStorage {
                 }
             })
             .collect();
-        summaries.sort_by(|a, b| b.total_executions.cmp(&a.total_executions).then_with(|| a.label.cmp(&b.label)));
+        summaries.sort_by(|a, b| {
+            b.total_executions
+                .cmp(&a.total_executions)
+                .then_with(|| a.label.cmp(&b.label))
+        });
         Ok(summaries)
     }
 
@@ -459,7 +465,12 @@ impl BesStorage {
                     match ex.status.as_str() {
                         "PASSED" => passed += 1,
                         "FLAKY" => flaky += 1,
-                        "FAILED" | "TIMEOUT" | "INCOMPLETE" | "REMOTE_FAILURE" | "FAILED_TO_BUILD" | "TOOL_HALTED_BEFORE_TESTING" => failed += 1,
+                        "FAILED"
+                        | "TIMEOUT"
+                        | "INCOMPLETE"
+                        | "REMOTE_FAILURE"
+                        | "FAILED_TO_BUILD"
+                        | "TOOL_HALTED_BEFORE_TESTING" => failed += 1,
                         _ => {}
                     }
                     if ex.cached_locally || ex.cached_remotely {
@@ -477,7 +488,11 @@ impl BesStorage {
                 }
             })
             .collect();
-        summaries.sort_by(|a, b| b.total_runs.cmp(&a.total_runs).then_with(|| a.label.cmp(&b.label)));
+        summaries.sort_by(|a, b| {
+            b.total_runs
+                .cmp(&a.total_runs)
+                .then_with(|| a.label.cmp(&b.label))
+        });
         Ok(summaries)
     }
 
@@ -749,7 +764,9 @@ fn build_event_to_json(event: &BuildEvent) -> Value {
     if let Some(payload) = &event.payload {
         let kind = payload_kind(payload);
         obj["kind"] = Value::String(kind.clone());
-        obj["timestamp"] = payload_timestamp(payload).map(Value::String).unwrap_or(Value::Null);
+        obj["timestamp"] = payload_timestamp(payload)
+            .map(Value::String)
+            .unwrap_or(Value::Null);
         obj["payload"] = match payload {
             Payload::Progress(p) => serde_json::json!({
                 "Progress": {
@@ -914,7 +931,10 @@ fn payload_timestamp(payload: &Payload) -> Option<String> {
         Payload::Started(s) => s.start_time.as_ref().map(prost_timestamp_to_rfc3339),
         Payload::Action(a) => a.start_time.as_ref().map(prost_timestamp_to_rfc3339),
         Payload::Finished(f) => f.finish_time.as_ref().map(prost_timestamp_to_rfc3339),
-        Payload::TestResult(t) => t.test_attempt_start.as_ref().map(prost_timestamp_to_rfc3339),
+        Payload::TestResult(t) => t
+            .test_attempt_start
+            .as_ref()
+            .map(prost_timestamp_to_rfc3339),
         Payload::TestSummary(t) => t.first_start_time.as_ref().map(prost_timestamp_to_rfc3339),
         _ => None,
     }
@@ -932,7 +952,9 @@ fn build_event_id_kind(id: &BuildEventId) -> String {
             build_event_id::Id::TestResult(t) => format!("TestResult:{}", t.label),
             build_event_id::Id::TestSummary(t) => format!("TestSummary:{}", t.label),
             build_event_id::Id::Pattern(p) => format!("Pattern:{}", p.pattern.join(",")),
-            build_event_id::Id::PatternSkipped(p) => format!("PatternSkipped:{}", p.pattern.join(",")),
+            build_event_id::Id::PatternSkipped(p) => {
+                format!("PatternSkipped:{}", p.pattern.join(","))
+            }
             build_event_id::Id::TargetConfigured(t) => format!("TargetConfigured:{}", t.label),
             build_event_id::Id::Configuration(_) => "Configuration".to_string(),
             build_event_id::Id::NamedSet(_) => "NamedSetOfFiles".to_string(),
@@ -945,7 +967,9 @@ fn build_event_id_kind(id: &BuildEventId) -> String {
             build_event_id::Id::BuildMetrics(_) => "BuildMetrics".to_string(),
             build_event_id::Id::Fetch(_) => "Fetch".to_string(),
             build_event_id::Id::TargetSummary(_) => "TargetSummary".to_string(),
-            build_event_id::Id::ConvenienceSymlinksIdentified(_) => "ConvenienceSymlinksIdentified".to_string(),
+            build_event_id::Id::ConvenienceSymlinksIdentified(_) => {
+                "ConvenienceSymlinksIdentified".to_string()
+            }
             build_event_id::Id::ExecRequest(_) => "ExecRequest".to_string(),
             build_event_id::Id::TestProgress(_) => "TestProgress".to_string(),
             build_event_id::Id::SkyvalueUploaded(_) => "SkyValueUploaded".to_string(),
@@ -989,7 +1013,11 @@ fn build_target_execution(
     let tags = completed
         .get("tag")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     TargetExecution {
         label: label.to_string(),
@@ -1063,7 +1091,9 @@ fn extract_env_vars(events: &[Value]) -> std::collections::HashMap<String, Strin
     }
 
     for event in events {
-        let Some(payload) = event.get("payload") else { continue };
+        let Some(payload) = event.get("payload") else {
+            continue;
+        };
         let Some(args) = payload
             .get("UnstructuredCommandLine")
             .and_then(|u| u.get("args"))
@@ -1099,7 +1129,9 @@ fn update_action_metrics(
     metrics: &mut HashMap<String, TargetActionMetrics>,
     action: &ActionExecuted,
 ) {
-    let Some(label) = target_label_from_action_id(action) else { return };
+    let Some(label) = target_label_from_action_id(action) else {
+        return;
+    };
     if label.is_empty() {
         return;
     }
@@ -1184,10 +1216,12 @@ fn build_event_id_to_json(id: &BuildEventId) -> Value {
                 obj["test_summary"] = serde_json::json!({ "label": t.label });
             }
             build_event_id::Id::Pattern(p) => {
-                obj["pattern"] = Value::Array(p.pattern.iter().cloned().map(Value::String).collect());
+                obj["pattern"] =
+                    Value::Array(p.pattern.iter().cloned().map(Value::String).collect());
             }
             build_event_id::Id::PatternSkipped(p) => {
-                obj["pattern_skipped"] = Value::Array(p.pattern.iter().cloned().map(Value::String).collect());
+                obj["pattern_skipped"] =
+                    Value::Array(p.pattern.iter().cloned().map(Value::String).collect());
             }
             _ => {
                 obj["other"] = Value::String(format!("{:?}", inner));
