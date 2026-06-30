@@ -24,7 +24,6 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Build FerrisRBE OCI image using Bazel (dogfooding)
   build:
     name: Build OCI Image
     runs-on: ubuntu-latest
@@ -48,13 +47,12 @@ jobs:
       - name: Build OCI image with Bazel
         run: |
           # Build AMD64 images (GitHub Actions runners are AMD64)
-          bazel run //oci:server_load_amd64
-          bazel run //oci:worker_load_amd64
+          bazel run //oci:server.amd64.image.load
+          bazel run //oci:worker.amd64.image.load
+          bazel run //oci:cache.amd64.image.load
           
-          # Verify images were loaded
           docker images | grep ferrisrbe || true
           
-          # Get image info
           echo "=== Server Image Details ==="
           docker inspect ferrisrbe/server:latest --format='{{.Size}}' | awk '{print "Size: " $1/1024/1024 " MB"}'
           docker inspect ferrisrbe/server:latest --format='{{.Id}}' | cut -d: -f2 | head -c 12 | xargs -I {} echo "Image ID: {}"
@@ -62,13 +60,18 @@ jobs:
           echo "=== Worker Image Details ==="
           docker inspect ferrisrbe/worker:latest --format='{{.Size}}' | awk '{print "Size: " $1/1024/1024 " MB"}'
           docker inspect ferrisrbe/worker:latest --format='{{.Id}}' | cut -d: -f2 | head -c 12 | xargs -I {} echo "Image ID: {}"
+          
+          echo "=== Cache Image Details ==="
+          docker inspect ferrisrbe/cache:latest --format='{{.Size}}' | awk '{print "Size: " $1/1024/1024 " MB"}'
+          docker inspect ferrisrbe/cache:latest --format='{{.Id}}' | cut -d: -f2 | head -c 12 | xargs -I {} echo "Image ID: {}"
       
       - name: Save images as artifacts
         run: |
           mkdir -p /tmp/docker-images
           docker save ferrisrbe/server:latest | gzip > /tmp/docker-images/ferrisrbe-server.tar.gz
           docker save ferrisrbe/worker:latest | gzip > /tmp/docker-images/ferrisrbe-worker.tar.gz
-      
+          docker save ferrisrbe/cache:latest | gzip > /tmp/docker-images/ferrisrbe-cache.tar.gz
+
       - name: Upload server image artifact
         uses: actions/upload-artifact@v4
         with:
@@ -83,8 +86,13 @@ jobs:
           path: /tmp/docker-images/ferrisrbe-worker.tar.gz
           retention-days: 1
 
-  # Run full benchmarks on PR: benchmark suite + comparison vs official release + regression check
-  # Posts a single unified comment (upserted on every push).
+      - name: Upload cache image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferrisrbe-cache-image
+          path: /tmp/docker-images/ferrisrbe-cache.tar.gz
+          retention-days: 1
+
   benchmark-pr:
     name: Benchmark PR
     runs-on: ubuntu-latest
@@ -97,7 +105,7 @@ jobs:
 
     services:
       rbe-cache:
-        image: xangcastle/ferris-cache:latest
+        image: xangcastle/cache:latest
         ports:
           - 9094:9094
           - 8080:8080
@@ -276,16 +284,14 @@ jobs:
               console.log('Created benchmark comment');
             }
 
-  # Run full benchmarks on main branch or manual trigger
   benchmark-full:
     name: Benchmark Full Suite (Container)
-    runs-on: ubuntu-latest-8-core  # Larger runner for full benchmarks
+    runs-on: ubuntu-latest-8-core
     needs: build
     if: github.event_name == 'push' || github.event.inputs.benchmark_all == 'true'
     permissions:
       contents: read
     
-    # Use GitHub Actions services for rbe-cache (CAS)
     services:
       rbe-cache:
         image: xangcastle/ferris-cache:latest
@@ -307,7 +313,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for comparison
+          fetch-depth: 0
       
       - name: Download image artifact
         uses: actions/download-artifact@v4
