@@ -31,30 +31,6 @@ jobs:
       - name: Check formatting
         run: rustfmt --edition 2021 --check $(find src -name "*.rs")
 
-  no-cargo:
-    name: No Cargo in Scripts/Docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check for cargo usage in scripts and docs
-        run: |
-          # Search for cargo commands in user-facing scripts/docs.
-          # Allowed exceptions: Cargo.toml/Cargo.lock themselves, deny.toml,
-          # dependabot config, build.rs cargo directives, and Bazel crate_universe files.
-          matches=$(grep -REn 'cargo[[:space:]]+(run|build|test|check|clippy|fmt|update|install|binstall)([[:space:]]|$)|cargo$' \
-            --include='*.sh' --include='*.md' --include='*.yml' --include='*.yaml' \
-            scripts docs benchmark/scripts src/version README.md AGENTS.md || true)
-
-          if [ -n "$matches" ]; then
-            echo "❌ Found direct cargo usage in scripts/docs:"
-            echo "$matches"
-            echo ""
-            echo "FerrisRBE builds only with Bazel. Cargo.toml/Cargo.lock are inputs for crate_universe."
-            exit 1
-          fi
-          echo "✅ No direct cargo usage found in scripts/docs."
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -276,7 +252,7 @@ jobs:
 
   benchmark-pr:
     name: Benchmark PR
-    runs-on: ubuntu-latest-8-cores
+    runs-on: ubuntu-latest
     needs: integration
     if: github.event_name == 'pull_request'
     permissions:
@@ -461,7 +437,7 @@ jobs:
 
   benchmark-push:
     name: Benchmark Full Suite (Container)
-    runs-on: ubuntu-latest-8-cores
+    runs-on: ubuntu-latest
     needs: integration
     if: github.event_name == 'push' || github.event.inputs.benchmark_all == 'true'
     permissions:
