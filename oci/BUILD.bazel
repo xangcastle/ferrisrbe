@@ -269,3 +269,99 @@ oci_push(
     repository = "docker.io/xangcastle/ferris-cache",
     visibility = ["//visibility:public"],
 )
+
+platform_transition_filegroup(
+    name = "bes.amd64",
+    srcs = ["//:bes"],
+    target_platform = "//platforms:linux_amd64",
+)
+
+tar(
+    name = "bes.amd64.layer",
+    srcs = [":bes.amd64"],
+    mtree = [
+        "./app/bes type=file content=$(execpath :bes.amd64)",
+    ],
+)
+
+oci_image(
+    name = "bes.amd64.image",
+    base = "@debian_bookworm_slim_linux_amd64",
+    entrypoint = ["/app/bes"],
+    env = {
+        "RUST_LOG": "info",
+        "RBE_BES_PORT": "9095",
+        "RBE_BES_UI_PORT": "9096",
+        "RBE_BES_DATA_DIR": "/data/bes",
+        "RBE_BES_STATIC_DIR": "/app/ui/dist",
+    },
+    exposed_ports = [
+        "9095",
+        "9096",
+    ],
+    tars = [":bes.amd64.layer"],
+    visibility = ["//visibility:public"],
+)
+
+oci_load(
+    name = "bes.amd64.image.load",
+    image = ":bes.amd64.image",
+    repo_tags = ["ferrisrbe/bes:latest"],
+    visibility = ["//visibility:public"],
+)
+
+platform_transition_filegroup(
+    name = "bes.arm64",
+    srcs = ["//:bes"],
+    target_platform = "//platforms:linux_arm64",
+)
+
+tar(
+    name = "bes.arm64.layer",
+    srcs = [":bes.arm64"],
+    mtree = [
+        "./app/bes type=file content=$(execpath :bes.arm64)",
+    ],
+)
+
+oci_image(
+    name = "bes.arm64.image",
+    base = "@debian_bookworm_slim_linux_arm64_v8",
+    entrypoint = ["/app/bes"],
+    env = {
+        "RUST_LOG": "info",
+        "RBE_BES_PORT": "9095",
+        "RBE_BES_UI_PORT": "9096",
+        "RBE_BES_DATA_DIR": "/data/bes",
+        "RBE_BES_STATIC_DIR": "/app/ui/dist",
+    },
+    exposed_ports = [
+        "9095",
+        "9096",
+    ],
+    tars = [":bes.arm64.layer"],
+    visibility = ["//visibility:public"],
+)
+
+oci_load(
+    name = "bes.arm64.image.load",
+    image = ":bes.arm64.image",
+    repo_tags = ["ferrisrbe/bes:latest"],
+    visibility = ["//visibility:public"],
+)
+
+oci_image_index(
+    name = "bes.image.multiplatform",
+    images = [
+        ":bes.amd64.image",
+        ":bes.arm64.image",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+oci_push(
+    name = "bes.image.push",
+    image = ":bes.image.multiplatform",
+    repository = "docker.io/xangcastle/ferris-bes",
+    visibility = ["//visibility:public"],
+)
