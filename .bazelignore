@@ -4,4 +4,4 @@ examples/
 .bazel/
 target/
 logs_*
-cache-data
+.cache

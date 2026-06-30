@@ -104,6 +104,19 @@ fn main() -> Result<()> {
             .expect("remote_execution.proto not found");
     let semver_proto = resolve_proto_file("proto/build/bazel/semver/semver.proto")
         .expect("semver.proto not found");
+    let build_event_stream_proto = resolve_proto_file(
+        "proto/build/bazel/build_event_stream/build_event_stream_minimal.proto",
+    )
+    .expect("build_event_stream_minimal.proto not found");
+    let build_events_proto =
+        resolve_proto_file("proto/google/devtools/build/v1/build_events.proto")
+            .expect("build_events.proto not found");
+    let build_status_proto =
+        resolve_proto_file("proto/google/devtools/build/v1/build_status.proto")
+            .expect("build_status.proto not found");
+    let publish_build_event_proto =
+        resolve_proto_file("proto/google/devtools/build/v1/publish_build_event.proto")
+            .expect("publish_build_event.proto not found");
     let operations_proto = resolve_proto_file("proto/google/longrunning/operations.proto")
         .expect("operations.proto not found");
     let status_proto =
@@ -120,6 +133,13 @@ fn main() -> Result<()> {
         .expect("annotations.proto not found");
     let http_proto =
         resolve_proto_file("proto/google/api/http.proto").expect("http.proto not found");
+    let client_proto =
+        resolve_proto_file("proto/google/api/client.proto").expect("client.proto not found");
+    let field_behavior_proto =
+        resolve_proto_file("proto/google/api/field_behavior.proto")
+            .expect("field_behavior.proto not found");
+    let spawn_proto =
+        resolve_proto_file("proto/tools/protos/spawn.proto").expect("spawn.proto not found");
 
     let proto_include = worker_proto
         .parent()
@@ -142,11 +162,18 @@ fn main() -> Result<()> {
                 worker_proto.to_str().unwrap(),
                 remote_execution_proto.to_str().unwrap(),
                 semver_proto.to_str().unwrap(),
+                build_event_stream_proto.to_str().unwrap(),
+                build_events_proto.to_str().unwrap(),
+                build_status_proto.to_str().unwrap(),
+                publish_build_event_proto.to_str().unwrap(),
                 wrappers_proto.to_str().unwrap(),
                 duration_proto.to_str().unwrap(),
                 any_proto.to_str().unwrap(),
                 annotations_proto.to_str().unwrap(),
                 http_proto.to_str().unwrap(),
+                client_proto.to_str().unwrap(),
+                field_behavior_proto.to_str().unwrap(),
+                spawn_proto.to_str().unwrap(),
                 operations_proto.to_str().unwrap(),
                 status_proto.to_str().unwrap(),
                 bytestream_proto.to_str().unwrap(),

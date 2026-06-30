@@ -17,7 +17,7 @@ services:
       - "9094:9094"
       - "8080:8080"
     volumes:
-      - ./cache-data:/data
+      - ./.cache:/data
     environment:
       - RUST_LOG=info
       - RBE_CACHE_PORT=9094
@@ -77,5 +77,28 @@ services:
       retries: 3
       start_period: 10s
 
+  bes:
+    image: localhost/ferrisrbe/bes:latest
+    ports:
+      - "9095:9095"
+      - "9096:9096"
+    volumes:
+      - ./.bes:/data/bes
+      - ./ui/dist:/app/ui/dist
+    environment:
+      - RUST_LOG=info
+      - RBE_BES_PORT=9095
+      - RBE_BES_UI_PORT=9096
+      - RBE_BES_BIND_ADDRESS=0.0.0.0
+      - RBE_BES_DATA_DIR=/data/bes
+      - RBE_BES_STATIC_DIR=/app/ui/dist
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9096'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
 volumes:
   worker-workdir:
+  bes-data:

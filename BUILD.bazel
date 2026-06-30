@@ -41,6 +41,7 @@ rust_library(
         "@crates//:ahash",
         "@crates//:anyhow",
         "@crates//:async-stream",
+        "@crates//:axum",
         "@crates//:bytes",
         "@crates//:chrono",
         "@crates//:crossbeam",
@@ -61,6 +62,8 @@ rust_library(
         "@crates//:tokio-stream",
         "@crates//:tokio-util",
         "@crates//:tonic",
+        "@crates//:tower",
+        "@crates//:tower-http",
         "@crates//:tracing",
         "@crates//:tracing-subscriber",
         "@crates//:uuid",
@@ -174,6 +177,27 @@ rust_binary(
     ],
 )
 
+rust_binary(
+    name = "bes",
+    srcs = ["src/bin/bes.rs"],
+    compile_data = [":build_script"],
+    crate_root = "src/bin/bes.rs",
+    edition = "2021",
+    proc_macro_deps = [
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        ":rbe_lib",
+        "@crates//:anyhow",
+        "@crates//:tokio",
+        "@crates//:tonic",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+    ],
+)
+
 rust_doc(
     name = "rbe_lib_doc",
     crate = ":rbe_lib",
@@ -222,6 +246,7 @@ rust_test(
 filegroup(
     name = "all",
     srcs = [
+        ":bes",
         ":cache",
         ":server",
         ":worker",
