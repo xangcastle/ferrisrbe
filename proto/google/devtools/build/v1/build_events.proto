@@ -28,160 +28,142 @@ option java_package = "com.google.devtools.build.v1";
 option php_namespace = "Google\\Cloud\\Build\\V1";
 
 // An event representing some state change that occurred in the build. This
-// message does not include field for uniquely identifying an event.
 message BuildEvent {
-  // Notification that the build system has attempted to run the build tool.
+// Notification that the build system has attempted to run the build tool.
   message InvocationAttemptStarted {
-    // The number of the invocation attempt, starting at 1 and increasing by 1
-    // for each new attempt. Can be used to determine if there is a later
-    // invocation attempt replacing the current one a client is processing.
+// The number of the invocation attempt, starting at 1 and increasing by 1
     int64 attempt_number = 1;
 
-    // Arbitrary details about the invocation attempt.
+// Arbitrary details about the invocation attempt.
     google.protobuf.Any details = 2;
   }
 
-  // Notification that an invocation attempt has finished.
+// Notification that an invocation attempt has finished.
   message InvocationAttemptFinished {
-    // Final status of the invocation.
+// Final status of the invocation.
     BuildStatus invocation_status = 3;
 
-    // Arbitrary details about the invocation attempt.
+// Arbitrary details about the invocation attempt.
     google.protobuf.Any details = 4;
   }
 
-  // Notification that the build request is enqueued.
+// Notification that the build request is enqueued.
   message BuildEnqueued {
-    // Additional details about the Build.
+// Additional details about the Build.
     google.protobuf.Any details = 1;
   }
 
-  // Notification that the build request has finished, and no further
-  // invocations will occur.  Note that this applies to the entire Build.
-  // Individual invocations trigger InvocationFinished when they finish.
+// Notification that the build request has finished, and no further
   message BuildFinished {
-    // Final status of the build.
+// Final status of the build.
     BuildStatus status = 1;
 
-    // Additional details about the Build.
+// Additional details about the Build.
     google.protobuf.Any details = 2;
   }
 
-  // Textual output written to standard output or standard error.
+// Textual output written to standard output or standard error.
   message ConsoleOutput {
-    // The output stream type.
+// The output stream type.
     ConsoleOutputStream type = 1;
 
-    // The output stream content.
+// The output stream content.
     oneof output {
-      // Regular UTF-8 output; normal text.
+// Regular UTF-8 output; normal text.
       string text_output = 2;
 
-      // Used if the output is not UTF-8 text (for example, a binary proto).
+// Used if the output is not UTF-8 text (for example, a binary proto).
       bytes binary_output = 3;
     }
   }
 
-  // Notification of the end of a build event stream published by a build
-  // component other than CONTROLLER (See StreamId.BuildComponents).
+// Notification of the end of a build event stream published by a build
   message BuildComponentStreamFinished {
-    // How did the event stream finish.
+// How did the event stream finish.
     enum FinishType {
-      // Unknown or unspecified; callers should never set this value.
+// Unknown or unspecified; callers should never set this value.
       FINISH_TYPE_UNSPECIFIED = 0;
 
-      // Set by the event publisher to indicate a build event stream is
-      // finished.
+// Set by the event publisher to indicate a build event stream is
       FINISHED = 1;
 
-      // Set by the WatchBuild RPC server when the publisher of a build event
-      // stream stops publishing events without publishing a
-      // BuildComponentStreamFinished event whose type equals FINISHED.
+// Set by the WatchBuild RPC server when the publisher of a build event
       EXPIRED = 2;
     }
 
-    // How the event stream finished.
+// How the event stream finished.
     FinishType type = 1;
   }
 
-  // This should be precisely the time when this event happened, and not when
-  // the event proto was created or sent.
+// This should be precisely the time when this event happened, and not when
   google.protobuf.Timestamp event_time = 1;
 
-  // //////////////////////////////////////////////////////////////////////////
-  // Events that indicate a state change of a build request in the build
-  // queue.
+// Events that indicate a state change of a build request in the build
   oneof event {
-    // An invocation attempt has started.
+// An invocation attempt has started.
     InvocationAttemptStarted invocation_attempt_started = 51;
 
-    // An invocation attempt has finished.
+// An invocation attempt has finished.
     InvocationAttemptFinished invocation_attempt_finished = 52;
 
-    // The build is enqueued.
+// The build is enqueued.
     BuildEnqueued build_enqueued = 53;
 
-    // The build has finished. Set when the build is terminated.
+// The build has finished. Set when the build is terminated.
     BuildFinished build_finished = 55;
 
-    // An event containing printed text.
+// An event containing printed text.
     ConsoleOutput console_output = 56;
 
-    // Indicates the end of a build event stream (with the same StreamId) from
-    // a build component executing the requested build task.
-    // *** This field does not indicate the WatchBuild RPC is finished. ***
+// Indicates the end of a build event stream (with the same StreamId) from
     BuildComponentStreamFinished component_stream_finished = 59;
 
-    // Structured build event generated by Bazel about its execution progress.
+// Structured build event generated by Bazel about its execution progress.
     google.protobuf.Any bazel_event = 60;
 
-    // An event that contains supplemental tool-specific information about
-    // build execution.
+// An event that contains supplemental tool-specific information about
     google.protobuf.Any build_execution_event = 61;
 
-    // An event that contains supplemental tool-specific information about
-    // source fetching.
+// An event that contains supplemental tool-specific information about
     google.protobuf.Any source_fetch_event = 62;
   }
 }
 
 // Unique identifier for a build event stream.
 message StreamId {
-  // Which build component generates this event stream. Each build component
-  // may generate one event stream.
+// Which build component generates this event stream. Each build component
   enum BuildComponent {
-    // Unknown or unspecified; callers should never set this value.
+// Unknown or unspecified; callers should never set this value.
     UNKNOWN_COMPONENT = 0;
 
-    // A component that coordinates builds.
+// A component that coordinates builds.
     CONTROLLER = 1;
 
-    // A component that runs executables needed to complete a build.
+// A component that runs executables needed to complete a build.
     WORKER = 2;
 
-    // A component that builds something.
+// A component that builds something.
     TOOL = 3;
   }
 
-  // The id of a Build message.
+// The id of a Build message.
   string build_id = 1;
 
-  // The unique invocation ID within this build.
-  // It should be the same as {invocation} (below) during the migration.
+// The unique invocation ID within this build.
   string invocation_id = 6;
 
-  // The component that emitted this event.
+// The component that emitted this event.
   BuildComponent component = 3;
 }
 
 // The type of console output stream.
 enum ConsoleOutputStream {
-  // Unspecified or unknown.
+// Unspecified or unknown.
   UNKNOWN = 0;
 
-  // Normal output stream.
+// Normal output stream.
   STDOUT = 1;
 
-  // Error output stream.
+// Error output stream.
   STDERR = 2;
 }

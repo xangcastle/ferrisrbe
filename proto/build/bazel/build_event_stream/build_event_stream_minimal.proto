@@ -29,7 +29,6 @@ option java_package = "com.google.devtools.build.lib.buildeventstream";
 option java_outer_classname = "BuildEventStreamProtos";
 
 // Identifier for a build event. It is deliberately structured to also provide
-// information about which build target etc the event is related to.
 message BuildEventId {
   message UnknownBuildEventId {
     string details = 1;
