@@ -87,11 +87,11 @@ jobs:
 
       - name: Build binaries
         run: |
-          bazel build //:rbe-server //:rbe-worker //:rbe-cache
+          bazel build //:server //:worker //:cache //:bes
 
       - name: Build container images
         run: |
-          bazel build //oci:server_image_amd64 //oci:worker_image_amd64 //oci:cache_image_amd64
+          bazel build //oci:server.amd64.image //oci:server.amd64.image //oci:server.amd64.image //oci:bes.amd64.image
 
 
 
@@ -144,10 +144,10 @@ jobs:
 
       - name: Build and load AMD64 images
         run: |
-          # Build and load AMD64 images for CI (GitHub Actions is AMD64)
-          bazel run //oci:server_load_amd64
-          bazel run //oci:worker_load_amd64
-          bazel run //oci:cache_load_amd64
+          bazel run //oci:server.amd64.image.load
+          bazel run //oci:worker.amd64.image.load
+          bazel run //oci:cache.amd64.image.load
+          bazel run //oci:bes.amd64.image.load
           
           echo "=== Docker images ==="
           docker images | grep ferrisrbe || true
