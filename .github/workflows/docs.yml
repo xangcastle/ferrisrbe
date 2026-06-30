@@ -38,7 +38,8 @@ jobs:
       - name: Prepare docs for GitHub Pages
         run: |
           mkdir -p _site
-          cp -r $(bazel cquery --output=files //:rbe_lib_doc)/* _site/
+          doc_path="$(bazel info execution_root)/$(bazel cquery --output=files //:rbe_lib_doc)"
+          cp -r "$doc_path"/* _site/
           echo "<meta http-equiv=\"refresh\" content=\"0;url=./rbe_server/\">" > _site/index.html
           touch _site/.nojekyll
 
