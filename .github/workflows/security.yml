@@ -30,6 +30,7 @@ jobs:
         uses: rustsec/audit-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          args: --file Cargo.lock
 
   cargo-deny:
     name: Cargo Deny
