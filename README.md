@@ -30,26 +30,7 @@ Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ m
 
 ## 🚀 Quick Start
 
-### Option 1: Railway (Easiest - Remote Cache + BES)
-
-Deploy the FerrisRBE server with one click. This gives you a managed **Remote Cache** (CAS + ActionCache) and **Build Event Service (BES)** endpoint:
-- **RBE Server** - gRPC API for cache
-- **rbe-cache** - Native cache server (CAS + ActionCache)
-- **BES** - Build Event Service UI/API
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/rxPtfg?referralCode=yQR-JU&utm_medium=integration&utm_source=template&utm_campaign=generic)
-
-```bash
-# Get your Railway server URL from the dashboard
-# Configure Bazel for remote caching:
-echo 'build:railway --remote_cache=grpc://<your-railway-url>' >> ~/.bazelrc
-echo 'build:railway --remote_upload_local_results=true' >> ~/.bazelrc
-bazel build --config=railway //...
-```
-
-> **Note:** Railway deploys the cache/BES server only. **Remote Execution requires workers**, which must be deployed separately via Podman Compose, Kubernetes, or Helm.
-
-### Option 2: Podman Compose (Full RBE - Local)
+### Option 1: Podman Compose (Full RBE - Local)
 
 Complete RBE stack with workers, cache, BES, and execution on your machine.
 
@@ -78,7 +59,7 @@ echo 'build:remote --remote_default_exec_properties=OSFamily=linux' >> ~/.bazelr
 bazel build --config=remote //...
 ```
 
-### Option 3: Kubernetes (Production)
+### Option 2: Kubernetes (Production)
 
 ```bash
 # Create namespace
