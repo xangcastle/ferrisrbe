@@ -260,20 +260,6 @@ jobs:
       issues: write
       pull-requests: write
 
-    services:
-      rbe-cache:
-        image: xangcastle/ferris-cache:latest
-        ports:
-          - 9094:9094
-          - 8080:8080
-        env:
-          RUST_LOG: info
-          RBE_CACHE_PORT: 9094
-          RBE_CACHE_HTTP_PORT: 8080
-          RBE_CACHE_DIR: /data
-          RBE_CACHE_MAX_SIZE_GB: 1
-          RBE_CACHE_AC_MAX_SIZE_GB: 1
-
     env:
       CAS_ENDPOINT: localhost:9094
       BENCHMARK_SERVICES: 1
@@ -292,7 +278,35 @@ jobs:
         run: |
           gunzip -c /tmp/ferrisrbe-images/ferrisrbe-server-amd64.tar.gz | docker load
           gunzip -c /tmp/ferrisrbe-images/ferrisrbe-worker-amd64.tar.gz | docker load
+          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-cache-amd64.tar.gz | docker load
           docker images | grep ferrisrbe || true
+
+      - name: Start cache service
+        run: |
+          docker run -d --name rbe-cache \
+            -p 9094:9094 \
+            -p 8080:8080 \
+            -e RUST_LOG=info \
+            -e RBE_CACHE_PORT=9094 \
+            -e RBE_CACHE_HTTP_PORT=8080 \
+            -e RBE_CACHE_DIR=/data \
+            -e RBE_CACHE_MAX_SIZE_GB=1 \
+            -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
+            ferrisrbe/cache:latest
+
+      - name: Wait for cache service
+        run: |
+          for i in $(seq 1 30); do
+            if nc -zv localhost 9094 2>/dev/null; then
+              echo "Cache service is ready"
+              exit 0
+            fi
+            echo "Waiting for cache service... ($i/30)"
+            sleep 1
+          done
+          echo "Cache service did not become ready"
+          docker logs rbe-cache
+          exit 1
 
       - name: Install dependencies
         run: |
@@ -443,20 +457,6 @@ jobs:
     permissions:
       contents: read
 
-    services:
-      rbe-cache:
-        image: xangcastle/ferris-cache:latest
-        ports:
-          - 9094:9094
-          - 8080:8080
-        env:
-          RUST_LOG: info
-          RBE_CACHE_PORT: 9094
-          RBE_CACHE_HTTP_PORT: 8080
-          RBE_CACHE_DIR: /data
-          RBE_CACHE_MAX_SIZE_GB: 1
-          RBE_CACHE_AC_MAX_SIZE_GB: 1
-
     env:
       CAS_ENDPOINT: localhost:9094
       BENCHMARK_SERVICES: 1
@@ -475,7 +475,35 @@ jobs:
       - name: Load Docker images
         run: |
           gunzip -c /tmp/ferrisrbe-images/ferrisrbe-server-amd64.tar.gz | docker load
+          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-cache-amd64.tar.gz | docker load
           docker images | grep ferrisrbe || true
+
+      - name: Start cache service
+        run: |
+          docker run -d --name rbe-cache \
+            -p 9094:9094 \
+            -p 8080:8080 \
+            -e RUST_LOG=info \
+            -e RBE_CACHE_PORT=9094 \
+            -e RBE_CACHE_HTTP_PORT=8080 \
+            -e RBE_CACHE_DIR=/data \
+            -e RBE_CACHE_MAX_SIZE_GB=1 \
+            -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
+            ferrisrbe/cache:latest
+
+      - name: Wait for cache service
+        run: |
+          for i in $(seq 1 30); do
+            if nc -zv localhost 9094 2>/dev/null; then
+              echo "Cache service is ready"
+              exit 0
+            fi
+            echo "Waiting for cache service... ($i/30)"
+            sleep 1
+          done
+          echo "Cache service did not become ready"
+          docker logs rbe-cache
+          exit 1
 
       - name: Install dependencies
         run: |
