@@ -1,0 +1,30 @@
+{{- if .Values.bes.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ferrisrbe.fullname" . }}-bes
+  namespace: {{ include "ferrisrbe.namespace" . }}
+  labels:
+    app.kubernetes.io/component: bes
+    {{- include "ferrisrbe.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.bes.service.type }}
+  ports:
+    - port: {{ .Values.bes.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+      {{- if and (eq .Values.bes.service.type "NodePort") .Values.bes.service.nodePortGrpc }}
+      nodePort: {{ .Values.bes.service.nodePortGrpc }}
+      {{- end }}
+    - port: {{ .Values.bes.service.uiPort }}
+      targetPort: ui
+      protocol: TCP
+      name: ui
+      {{- if and (eq .Values.bes.service.type "NodePort") .Values.bes.service.nodePortUi }}
+      nodePort: {{ .Values.bes.service.nodePortUi }}
+      {{- end }}
+  selector:
+    app.kubernetes.io/component: bes
+    {{- include "ferrisrbe.selectorLabels" . | nindent 4 }}
+{{- end }}

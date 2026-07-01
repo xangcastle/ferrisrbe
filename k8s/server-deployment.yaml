@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: ferrisrbe/server:latest
+          image: xangcastle/ferris-server:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc

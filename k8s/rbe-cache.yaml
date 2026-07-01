@@ -19,7 +19,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: rbe-cache
-          image: ferrisrbe/cache:latest
+          image: xangcastle/ferris-cache:latest
           env:
             - name: RUST_LOG
               value: "info"

@@ -59,16 +59,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            - name: cas-storage
-              mountPath: /data/cas
           securityContext:
             {{- toYaml .Values.server.securityContext | nindent 12 }}
       volumes:
         - name: tmp
           emptyDir: {}
-        - name: cas-storage
-          emptyDir:
-            sizeLimit: {{ .Values.cache.storage.size }}
       nodeSelector:
         {{- toYaml .Values.server.nodeSelector | nindent 8 }}
       tolerations:

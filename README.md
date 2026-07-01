@@ -30,59 +30,73 @@ Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ m
 
 ## 🚀 Quick Start
 
-### Option 1: Railway (Easiest - Full RBE)
+### Option 1: Railway (Easiest - Remote Cache + BES)
 
-Deploy complete Remote Build Execution infrastructure with one click:
-- **RBE Server** - gRPC API for cache and execution  
+Deploy the FerrisRBE server with one click. This gives you a managed **Remote Cache** (CAS + ActionCache) and **Build Event Service (BES)** endpoint:
+- **RBE Server** - gRPC API for cache
 - **rbe-cache** - Native cache server (CAS + ActionCache)
-- **Workers** - Build executors
+- **BES** - Build Event Service UI/API
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/rxPtfg?referralCode=yQR-JU&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 ```bash
 # Get your Railway server URL from the dashboard
-# Configure Bazel:
-echo 'build:remote --remote_executor=grpc://<your-railway-url>' >> ~/.bazelrc
-echo 'build:remote --remote_cache=grpc://<your-railway-url>' >> ~/.bazelrc
-echo 'build:remote --remote_default_exec_properties=OSFamily=linux' >> ~/.bazelrc
-bazel build --config=remote //...
+# Configure Bazel for remote caching:
+echo 'build:railway --remote_cache=grpc://<your-railway-url>' >> ~/.bazelrc
+echo 'build:railway --remote_upload_local_results=true' >> ~/.bazelrc
+bazel build --config=railway //...
 ```
+
+> **Note:** Railway deploys the cache/BES server only. **Remote Execution requires workers**, which must be deployed separately via Podman Compose, Kubernetes, or Helm.
 
 ### Option 2: Podman Compose (Full RBE - Local)
 
-Complete RBE stack with workers, cache, and execution on your machine.
+Complete RBE stack with workers, cache, BES, and execution on your machine.
 
 ```bash
 git clone https://github.com/xangcastle/ferrisrbe.git
 cd ferrisrbe
 
 # Build and load images with Bazel
-bazel run //oci:load_all
+bazel run //oci:server.amd64.image.load
+bazel run //oci:worker.amd64.image.load
+bazel run //oci:cache.amd64.image.load
+bazel run //oci:bes.amd64.image.load
 
 # Start the stack with Podman Compose
 podman-compose -f podman-compose.yml up -d
 
-# Verify the container is running and healthy
+# Verify the containers are running and healthy
 curl -I http://localhost:9092 || echo "Server is up"
+curl -I http://localhost:9096 || echo "BES UI is up"
 
 # Configure Bazel
-echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
 echo 'build:remote --remote_cache=grpc://localhost:9094' >> ~/.bazelrc
+echo 'build:remote --remote_upload_local_results=true' >> ~/.bazelrc
+echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
+echo 'build:remote --remote_default_exec_properties=OSFamily=linux' >> ~/.bazelrc
 bazel build --config=remote //...
 ```
 
 ### Option 3: Kubernetes (Production)
 
 ```bash
-# Helm install
-helm install ferrisrbe oci://ghcr.io/xangcastle/ferrisrbe/charts/ferrisrbe \
+# Create namespace
+kubectl create namespace rbe
+
+# Helm install from local chart
+helm install ferrisrbe ./charts/ferrisrbe \
   --namespace rbe --create-namespace
 
 # Or with NodePort for local testing
-helm install ferrisrbe oci://ghcr.io/xangcastle/ferrisrbe/charts/ferrisrbe \
+helm install ferrisrbe ./charts/ferrisrbe \
   --namespace rbe --create-namespace \
   --set server.service.type=NodePort \
-  --set server.service.nodePort=30092
+  --set server.service.nodePort=30092 \
+  --set cache.service.type=NodePort \
+  --set cache.service.nodePortGrpc=30094 \
+  --set bes.service.type=NodePort \
+  --set bes.service.nodePortUi=30096
 ```
 
 For advanced deployments requiring extensive configuration, [view the direct Helm deployment values.yaml](https://github.com/xangcastle/ferrisrbe/blob/main/charts/ferrisrbe/values.yaml).
@@ -224,7 +238,7 @@ Add to your `.bazelrc`:
 
 ```bash
 # Remote Cache (works from any OS)
-build:remote-cache --remote_cache=grpc://localhost:9092
+build:remote-cache --remote_cache=grpc://localhost:9094
 build:remote-cache --remote_upload_local_results=true
 
 # Remote Execution (requires Linux toolchains)
