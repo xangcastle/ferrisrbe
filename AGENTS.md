@@ -38,8 +38,8 @@ ferrisrbe/
 ├── MODULE.bazel            # Bazel module definition (bzlmod)
 ├── .bazelversion           # Bazel version (8.3.0)
 ├── .bazelrc                # Bazel build configuration
-├── Cargo.toml              # Rust configuration - defines rbe-server and rbe-worker binaries
-├── Cargo.lock              # Dependency lock file
+├── Cargo.toml              # Input for rules_rust crate_universe (do not use cargo directly)
+├── Cargo.lock              # Dependency lock file for crate_universe
 ├── build.rs                # Build script for protobuf code generation
 │
 ├── oci/                    # OCI container image definitions (rules_oci)
@@ -113,17 +113,13 @@ ferrisrbe/
 │   ├── configmap.yaml
 │   ├── server-deployment.yaml
 │   ├── worker-deployment.yaml
-│   ├── bazel-remote.yaml   # CAS storage (bazel-remote)
-│   └── redis.yaml          # Metadata store
+│   └── rbe-cache.yaml      # Native cache server (CAS + ActionCache)
 │
 ├── charts/                 # Helm charts
 │   └── ferrisrbe/
 │       ├── Chart.yaml
 │       ├── values.yaml     # Configuration values
 │       └── templates/      # Kubernetes templates
-│
-├── scripts/                # Utility scripts
-│   └── run-local.sh        # Run server locally with cargo
 │
 ├── examples/               # Example Bazel projects for testing
 │   ├── bazel-7.4/
@@ -208,28 +204,6 @@ bazel test --test_output=all //...
 bazel test //:rbe_lib_test
 ```
 
-### Cargo Build (Development)
-
-For rapid development, you can still use Cargo:
-
-```bash
-# Development build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-
-# Build specific binary
-cargo build --release --bin rbe-server
-cargo build --release --bin rbe-worker
-
-# Run tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-```
-
 #### Protobuf Code Generation
 The protobuf code is automatically generated during build via `build.rs`:
 - Worker proto generates both client and server code
@@ -244,17 +218,11 @@ touch src/main.rs && touch src/bin/worker.rs
 
 ### Local Development
 
-Use the provided script:
-```bash
-./scripts/run-local.sh
-```
-
-Or manually:
 ```bash
 export RBE_PORT=9092
 export RBE_BIND_ADDRESS=127.0.0.1
 export RUST_LOG=info
-cargo run --release
+bazel run //:rbe-server
 ```
 
 ### Kubernetes Deployment
@@ -273,17 +241,17 @@ kubectl get pods -n rbe
 ./k8s/port-forward.sh
 ```
 
-### Docker Compose (Local Testing)
+### Podman Compose (Local Testing)
 
 ```bash
 # Start all services
-docker-compose up -d
+podman-compose -f podman-compose.yml up -d
 
 # View logs
-docker-compose logs -f
+podman-compose -f podman-compose.yml logs -f
 
 # Stop
-docker-compose down
+podman-compose -f podman-compose.yml down
 ```
 
 ## Architecture Overview
@@ -324,7 +292,7 @@ CacheCheck → Queued → Assigned → Downloading → Executing → Uploading �
 | WorkerRegistry | `src/worker/k8s.rs` | Worker registration and selection |
 | L1ActionCache | `src/cache/action_cache.rs` | In-memory action result cache (DashMap) |
 | CasBackend | `src/cas/mod.rs` | Unified CAS storage trait for all services |
-| GrpcCasBackend | `src/cas/backends/grpc.rs` | gRPC-based CAS proxy to bazel-remote |
+| GrpcCasBackend | `src/cas/backends/grpc.rs` | gRPC-based CAS proxy to rbe-cache |
 | OutputHandler | `src/execution/output_handler.rs` | Large output streaming to CAS |
 | VersionManager | `src/version/mod.rs` | Bazel version detection and handling |
 | ConnectionManager | `src/bin/resilient_connection/connection_manager.rs` | Worker connection lifecycle |
@@ -349,13 +317,13 @@ FerrisRBE uses a **unified CAS backend** that is shared between `CasService` and
                      │
          ┌───────────▼───────────┐
 │   GrpcCasBackend      │
-│   (bazel-remote)      │
+│   (rbe-cache)         │
 └───────────────────────┘
 ```
 
 **Storage Backend Options:**
 - **DiskBackend** - Filesystem-based storage (local CAS)
-- **GrpcCasBackend** - gRPC proxy to external CAS (bazel-remote)
+- **GrpcCasBackend** - gRPC proxy to external CAS (rbe-cache)
 - **HttpProxyBackend** - HTTP proxy backend
 
 ### Resilient Worker Connection
@@ -377,8 +345,7 @@ The worker implements enterprise-grade connection management:
 | `RBE_PORT` | `9092` | Server gRPC port |
 | `RBE_BIND_ADDRESS` | `0.0.0.0` | Bind address |
 | `RUST_LOG` | `info` | Log level (trace/debug/info/warn/error) |
-| `CAS_ENDPOINT` | `bazel-remote:9094` | CAS (bazel-remote) endpoint |
-| `REDIS_ENDPOINT` | `redis:6379` | Redis endpoint |
+| `CAS_ENDPOINT` | `rbe-cache:9094` | Native cache server (rbe-cache) endpoint |
 | `RBE_L1_CACHE_CAPACITY` | `100000` | L1 cache capacity |
 | `RBE_L1_CACHE_TTL_SECS` | `3600` | L1 cache TTL |
 | `RBE_INLINE_OUTPUT_THRESHOLD` | `1048576` | Inline output threshold (1MB) |
@@ -401,7 +368,7 @@ The worker implements enterprise-grade connection management:
 |----------|---------|-------------|
 | `WORKER_ID` | (generated) | Unique worker ID (falls back to HOSTNAME) |
 | `SERVER_ENDPOINT` | `http://rbe-server:9092` | RBE server endpoint |
-| `CAS_ENDPOINT` | `http://bazel-remote:9094` | CAS endpoint |
+| `CAS_ENDPOINT` | `http://rbe-cache:9094` | Native cache server endpoint |
 | `WORKER_TYPE` | `default` | Worker type (default, highcpu, gpu, etc.) |
 | `WORKER_LABELS` | `os=linux,arch=amd64` | Comma-separated labels |
 | `MAX_CONCURRENT` | `4` | Maximum concurrent executions |
@@ -508,15 +475,11 @@ Integration tests are in `src/main.rs` under `mod integration_tests`:
 # Run all Bazel tests
 bazel test //...
 
-# Run all Cargo tests
-cargo test
-
 # Run with verbose output
 bazel test --test_output=all //...
-cargo test -- --nocapture
 
 # Run specific test
-cargo test test_state_machine_full_flow
+bazel test //:rbe_lib_test --test_filter=test_state_machine_full_flow
 ```
 
 ## Security Considerations
@@ -535,24 +498,28 @@ cargo test test_state_machine_full_flow
 
 ### CAS Security
 
-- bazel-remote (CAS) should run within the cluster
+- rbe-cache (CAS) should run within the cluster
 - No external exposure of CAS endpoint
 - Authentication can be added at the gRPC middleware layer
 
 ## Deployment
 
-### Docker Compose
+### Podman Compose
 
 ```bash
-# Start all services (uses pre-built images from Docker Hub)
-docker-compose up -d
+# Build images locally with Bazel
+bazel run //oci:server_load
+bazel run //oci:worker_load
+bazel run //oci:cache_load
 
-# Or build locally with Bazel first, then run
-bazel run //oci:load_all
-docker-compose up -d
+# Start all services
+podman-compose -f podman-compose.yml up -d
+
+# Stop
+podman-compose -f podman-compose.yml down
 ```
 
-**Note:** docker-compose.yml uses `latest` tag which is updated on every release.
+**Note:** `podman-compose.yml` uses locally built images. Pre-built images are not currently provided.
 
 ### Railway Deployment (Remote Cache Only)
 
@@ -564,7 +531,7 @@ railway service create ferrisrbe-cache --source .
 ```
 
 **⚠️ Limitation:** Railway deployment only provides Remote Cache (Action Cache + CAS). 
-**Remote Execution requires workers** which must be deployed separately using Docker Compose or Kubernetes.
+**Remote Execution requires workers** which must be deployed separately using Podman Compose or Kubernetes.
 
 **Environment Variables:**
 
@@ -575,10 +542,10 @@ railway service create ferrisrbe-cache --source .
 
 **Current Image:** `xangcastle/ferris-server:latest`
 
-**For Full Remote Execution**, use Docker Compose or Helm locally:
+**For Full Remote Execution**, use Podman Compose or Helm locally:
 ```bash
 # Local full RBE with workers
-docker-compose up -d
+podman-compose -f podman-compose.yml up -d
 ```
 
 ### Helm Deployment (Recommended)
@@ -676,7 +643,7 @@ If you see "error reading a body from connection":
 The OutputHandler automatically handles large stdout/stderr:
 - **Threshold:** 1MB (outputs >= 1MB are stored in CAS)
 - **Verify handling:** Check server logs for "Output ... is large" or "Stored ... output in CAS"
-- **CAS storage:** Large outputs are stored in bazel-remote
+- **CAS storage:** Large outputs are stored in rbe-cache
 - **gRPC limit:** Tonic default is 4MB; OutputHandler prevents exceeding this
 
 ## Protocol Buffer APIs
@@ -721,7 +688,7 @@ Bidirectional streaming for worker management:
 ### Modifying Worker Protocol
 
 1. Update `proto/worker.proto`
-2. Regenerate code: `cargo build` or `bazel build //...`
+2. Regenerate code: `bazel build //...`
 3. Update both server (`src/server/worker_service.rs`) and worker (`src/bin/worker.rs`)
 
 ### Adding a New CAS Backend

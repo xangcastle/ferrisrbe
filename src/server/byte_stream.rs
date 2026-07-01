@@ -26,8 +26,8 @@ use std::time::Instant;
 /// accumulating in memory. This allows handling blobs of any size (GBs)
 /// without OOM errors.
 ///
-/// ```
-/// gRPC Stream → Channel → DiskBackend → Temp File → Atomic Rename
+/// ```text
+/// gRPC Stream -> Channel -> DiskBackend -> Temp File -> Atomic Rename
 /// ```
 pub struct ByteStreamService {
     backend: Arc<dyn CasBackend>,

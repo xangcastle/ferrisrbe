@@ -73,6 +73,10 @@ impl AdaptiveKeepalive {
             consecutive_failures: 0,
             rtt_history: VecDeque::with_capacity(100),
             max_rtt_history: 100,
+            // In tests start with a cooldown already elapsed so adjustments apply immediately.
+            #[cfg(test)]
+            last_adjustment: Instant::now() - Duration::from_secs(60),
+            #[cfg(not(test))]
             last_adjustment: Instant::now(),
             adjustment_cooldown: Duration::from_secs(30),
         }
@@ -266,7 +270,9 @@ mod tests {
 
     #[test]
     fn test_stats() {
-        let mut ak = AdaptiveKeepalive::new(15, 5, 60, 3);
+        // Use a high adjustment threshold so the stats are read before any
+        // interval adjustment resets the consecutive-success counter.
+        let mut ak = AdaptiveKeepalive::new(15, 5, 60, 100);
 
         ak.record_success(Duration::from_millis(10));
         ak.record_success(Duration::from_millis(20));

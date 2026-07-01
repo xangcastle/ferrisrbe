@@ -14,26 +14,24 @@ message Digest {
 }
 
 // WorkerService - Servicio bidireccional streaming
-// El worker se conecta al servidor y mantiene una conexión abierta
 service WorkerService {
-    // StreamWork - Conexión persistente worker <-> servidor
-    // El worker envía registros y heartbeats, recibe asignaciones
+// StreamWork - Conexión persistente worker <-> servidor
     rpc StreamWork(stream WorkerMessage) returns (stream ServerMessage);
 }
 
 // Mensajes del Worker al Server
 message WorkerMessage {
     oneof payload {
-        // Registro inicial del worker
+// Registro inicial del worker
         WorkerRegistration registration = 1;
         
-        // Heartbeat periódico
+// Heartbeat periódico
         WorkerHeartbeat heartbeat = 2;
         
-        // Actualización de estado de ejecución
+// Actualización de estado de ejecución
         ExecutionUpdate execution_update = 3;
         
-        // Resultado completado
+// Resultado completado
         ExecutionResult result = 4;
     }
 }
@@ -41,40 +39,40 @@ message WorkerMessage {
 // Mensajes del Server al Worker
 message ServerMessage {
     oneof payload {
-        // Confirmación de registro
+// Confirmación de registro
         RegistrationAck ack = 1;
         
-        // Asignación de trabajo
+// Asignación de trabajo
         WorkAssignment assignment = 2;
         
-        // Cancelación de ejecución
+// Cancelación de ejecución
         CancelExecution cancel = 3;
     }
 }
 
 // Registro de worker
 message WorkerRegistration {
-    // ID único del worker
+// ID único del worker
     string worker_id = 1;
     
-    // Tipo de worker (default, highcpu, gpu, etc)
+// Tipo de worker (default, highcpu, gpu, etc)
     string worker_type = 2;
     
-    // Labels (os=linux, arch=arm64, etc)
+// Labels (os=linux, arch=arm64, etc)
     repeated string labels = 3;
     
-    // Capacidades
+// Capacidades
     WorkerCapabilities capabilities = 4;
 }
 
 message WorkerCapabilities {
-    // Memoria disponible en MB
+// Memoria disponible en MB
     int32 memory_mb = 1;
     
-    // CPUs disponibles (millicores)
+// CPUs disponibles (millicores)
     int32 cpu_millicores = 2;
     
-    // Ejecuciones concurrentes máximas
+// Ejecuciones concurrentes máximas
     int32 max_concurrent = 3;
 }
 
@@ -83,7 +81,7 @@ message WorkerHeartbeat {
     string worker_id = 1;
     int64 timestamp_ms = 2;
     
-    // Estado actual
+// Estado actual
     enum State {
         IDLE = 0;
         BUSY = 1;
@@ -91,7 +89,7 @@ message WorkerHeartbeat {
     }
     State state = 3;
     
-    // IDs de ejecuciones activas
+// IDs de ejecuciones activas
     repeated string active_executions = 4;
 }
 
@@ -100,16 +98,16 @@ message ExecutionUpdate {
     string execution_id = 1;
     string worker_id = 2;
     
-    // Estado de la ejecución
+// Estado de la ejecución
     ExecutionState state = 3;
     
-    // Progreso 0-100
+// Progreso 0-100
     int32 progress_percent = 4;
     
-    // Mensaje descriptivo
+// Mensaje descriptivo
     string message = 5;
     
-    // Timestamp
+// Timestamp
     int64 timestamp_ms = 6;
 }
 
@@ -125,61 +123,61 @@ message ExecutionResult {
     string execution_id = 1;
     string worker_id = 2;
     
-    // Código de salida (0 = éxito)
+// Código de salida (0 = éxito)
     int32 exit_code = 3;
     
-    // Outputs
+// Outputs
     bytes stdout = 4;
     bytes stderr = 5;
     
-    // Digests de outputs subidos al CAS (deprecated, use output_files)
+// Digests de outputs subidos al CAS (deprecated, use output_files)
     repeated OutputDigest output_digests = 6;
     
-    // Archivos de salida subidos al CAS
+// Archivos de salida subidos al CAS
     repeated OutputFile output_files = 7;
     
-    // Directorios de salida subidos al CAS
+// Directorios de salida subidos al CAS
     repeated OutputDirectory output_directories = 8;
     
-    // Duración de ejecución en ms
+// Duración de ejecución en ms
     int64 execution_duration_ms = 9;
     
-    // Timestamp de finalización
+// Timestamp de finalización
     int64 completed_at_ms = 10;
 }
 
 message OutputDigest {
-    // Path relativo al directorio de trabajo
+// Path relativo al directorio de trabajo
     string path = 1;
     
-    // Digest del blob en CAS
+// Digest del blob en CAS
     Digest digest = 2;
     
-    // Si es ejecutable
+// Si es ejecutable
     bool is_executable = 3;
 }
 
 // Archivo de salida subido al CAS
 message OutputFile {
-    // Path relativo al execroot
+// Path relativo al execroot
     string path = 1;
     
-    // Digest del contenido del archivo
+// Digest del contenido del archivo
     Digest digest = 2;
     
-    // Tamaño en bytes
+// Tamaño en bytes
     int64 size_bytes = 3;
     
-    // Si es ejecutable
+// Si es ejecutable
     bool is_executable = 4;
 }
 
 // Directorio de salida subido al CAS como un Tree
 message OutputDirectory {
-    // Path relativo al execroot
+// Path relativo al execroot
     string path = 1;
     
-    // Digest del Tree (contiene la estructura del directorio)
+// Digest del Tree (contiene la estructura del directorio)
     Digest tree_digest = 2;
 }
 
@@ -188,48 +186,45 @@ message RegistrationAck {
     bool accepted = 1;
     string message = 2;
     
-    // Configuración del servidor
+// Configuración del servidor
     ServerConfig config = 3;
 }
 
 message ServerConfig {
-    // Endpoint del CAS (bazel-remote)
+// Endpoint del CAS (rbe-cache)
     string cas_endpoint = 1;
     
-    // Intervalo de heartbeat en segundos
+// Intervalo de heartbeat en segundos
     int32 heartbeat_interval_sec = 2;
 }
 
 // Asignación de trabajo
 message WorkAssignment {
-    // ID único de ejecución
+// ID único de ejecución
     string execution_id = 1;
     
-    // Digest de la acción (para buscar en CAS)
+// Digest de la acción (para buscar en CAS)
     Digest action_digest = 2;
     
-    // Digest del input root
+// Digest del input root
     Digest input_root_digest = 3;
     
-    // Timeout en segundos
+// Timeout en segundos
     int32 timeout_sec = 4;
     
-    // Comando a ejecutar (para ejecución simple)
+// Comando a ejecutar (para ejecución simple)
     repeated string command = 5;
     
-    // Variables de entorno
+// Variables de entorno
     repeated EnvironmentVariable environment_variables = 6;
     
-    // Archivos de salida esperados (relativos al execroot)
-    // Ej: ["bazel-out/k8-fastbuild/bin/my_app", "output.log"]
+// Archivos de salida esperados (relativos al execroot)
     repeated string output_files = 7;
     
-    // Directorios de salida esperados (relativos al execroot)
-    // Ej: ["bazel-out/k8-fastbuild/bin/_objs/my_app"]
+// Directorios de salida esperados (relativos al execroot)
     repeated string output_directories = 8;
     
-    // Directorio de trabajo relativo al execroot (opcional)
-    // Si se especifica, el comando se ejecuta desde este subdirectorio
+// Directorio de trabajo relativo al execroot (opcional)
     string working_directory = 9;
 }
 

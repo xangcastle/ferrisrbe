@@ -17,7 +17,9 @@ pub mod metrics;
 pub mod reconnection;
 
 pub use adaptive_keepalive::AdaptiveKeepalive;
-pub use connection_manager::{ConfigLoader, ConnectionConfig, ConnectionManager, ConnectionStats, ConnectionEvent};
+pub use connection_manager::{
+    ConfigLoader, ConnectionConfig, ConnectionEvent, ConnectionManager, ConnectionStats,
+};
 pub use connection_state::ConnectionState;
 pub use health_checker::{HealthCheckConfig, HealthChecker};
 pub use metrics::ConnectionMetrics;

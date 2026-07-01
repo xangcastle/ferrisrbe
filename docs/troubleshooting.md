@@ -127,7 +127,7 @@ bazel build --config=remote //... 2>&1 | grep "cache hit"
 
 **Step 5: Verify Cache Storage**
 ```bash
-kubectl exec -n rbe deploy/ferrisrbe-bazel-remote -- \
+kubectl exec -n rbe deploy/ferrisrbe-cache -- \
   ls -la /data/cas
 ```
 

@@ -1,224 +1,367 @@
-"""Build file para imágenes de contenedor OCI.
-
-Este archivo define las imágenes de contenedor para el servidor y worker de FerrisRBE
-usando rules_oci.
-"""
-
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
 
-# ============================================================================
-# Imagen del Servidor RBE
-# ============================================================================
-
-# Transiciones de plataforma para compilar nativamente los binarios
 platform_transition_filegroup(
-    name = "server_binary_amd64",
-    srcs = ["//:rbe-server"],
+    name = "server.amd64",
+    srcs = ["//:server"],
     target_platform = "//platforms:linux_amd64",
 )
 
-platform_transition_filegroup(
-    name = "server_binary_arm64",
-    srcs = ["//:rbe-server"],
-    target_platform = "//platforms:linux_arm64",
-)
-
-# Capas tar para cada arquitectura
 tar(
-    name = "server_layer_amd64",
-    srcs = [":server_binary_amd64"],
+    name = "server.amd64.layer",
+    srcs = [":server.amd64"],
     mtree = [
-        "./app/rbe_server type=file content=$(execpath :server_binary_amd64)",
+        "./app/server type=file content=$(execpath :server.amd64)",
     ],
 )
 
-tar(
-    name = "server_layer_arm64",
-    srcs = [":server_binary_arm64"],
-    mtree = [
-        "./app/rbe_server type=file content=$(execpath :server_binary_arm64)",
-    ],
-)
-
-# Imágenes base por arquitectura
-# (oci.pull las provee de debian_bookworm_slim)
 oci_image(
-    name = "server_image_amd64",
+    name = "server.amd64.image",
     base = "@debian_bookworm_slim_linux_amd64",
-    entrypoint = ["/app/rbe_server"],
+    entrypoint = ["/app/server"],
     exposed_ports = ["9092"],
-    tars = [":server_layer_amd64"],
+    tars = [":server.amd64.layer"],
     visibility = ["//visibility:public"],
 )
 
+oci_load(
+    name = "server.amd64.image.load",
+    image = ":server.amd64.image",
+    repo_tags = ["ferrisrbe/server:latest"],
+    visibility = ["//visibility:public"],
+)
+
+platform_transition_filegroup(
+    name = "server.arm64",
+    srcs = ["//:server"],
+    target_platform = "//platforms:linux_arm64",
+)
+
+tar(
+    name = "server.arm64.layer",
+    srcs = [":server.arm64"],
+    mtree = [
+        "./app/server type=file content=$(execpath :server.arm64)",
+    ],
+)
+
 oci_image(
-    name = "server_image_arm64",
+    name = "server.arm64.image",
     base = "@debian_bookworm_slim_linux_arm64_v8",
-    entrypoint = ["/app/rbe_server"],
+    entrypoint = ["/app/server"],
     exposed_ports = ["9092"],
-    tars = [":server_layer_arm64"],
+    tars = [":server.arm64.layer"],
     visibility = ["//visibility:public"],
 )
 
-# ============================================================================
-# Imagen del Worker RBE
-# ============================================================================
+oci_load(
+    name = "server.arm64.image.load",
+    image = ":server.arm64.image",
+    repo_tags = ["ferrisrbe/server:latest"],
+    visibility = ["//visibility:public"],
+)
 
-# Transiciones de plataforma
+oci_image_index(
+    name = "server.image.multiplatform",
+    images = [
+        ":server.amd64.image",
+        ":server.arm64.image",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+oci_push(
+    name = "server.image.push",
+    image = ":server.image.multiplatform",
+    repository = "docker.io/xangcastle/ferris-server",
+    visibility = ["//visibility:public"],
+)
+
 platform_transition_filegroup(
-    name = "worker_binary_amd64",
-    srcs = ["//:rbe-worker"],
+    name = "worker.amd64",
+    srcs = ["//:worker"],
     target_platform = "//platforms:linux_amd64",
 )
 
-platform_transition_filegroup(
-    name = "worker_binary_arm64",
-    srcs = ["//:rbe-worker"],
-    target_platform = "//platforms:linux_arm64",
-)
-
-# Capas tar por arquitectura
 tar(
-    name = "worker_layer_amd64",
-    srcs = [":worker_binary_amd64"],
+    name = "worker.amd64.layer",
+    srcs = [":worker.amd64"],
     mtree = [
-        "./app/rbe-worker type=file content=$(execpath :worker_binary_amd64)",
+        "./app/worker type=file content=$(execpath :worker.amd64)",
     ],
 )
 
-tar(
-    name = "worker_layer_arm64",
-    srcs = [":worker_binary_arm64"],
-    mtree = [
-        "./app/rbe-worker type=file content=$(execpath :worker_binary_arm64)",
-    ],
-)
-
-# Imágenes base por arquitectura
 oci_image(
-    name = "worker_image_amd64",
+    name = "worker.amd64.image",
     base = "@debian_bookworm_slim_linux_amd64",
-    entrypoint = ["/app/rbe-worker"],
+    entrypoint = ["/app/worker"],
     env = {
         "RUST_LOG": "info",
         "WORKER_ID": "",
-        "SERVER_ENDPOINT": "http://rbe-server:9092",
-        "CAS_ENDPOINT": "http://bazel-remote:9094",
+        "SERVER_ENDPOINT": "http://server:9092",
+        "CAS_ENDPOINT": "http://cache:9094",
         "WORKER_TYPE": "default",
         "WORKER_LABELS": "os=linux,arch=amd64",
         "MAX_CONCURRENT": "4",
         "WORKDIR": "/workspace",
     },
-    exposed_ports = ["9093"],
-    tars = [":worker_layer_amd64"],
+    tars = [":worker.amd64.layer"],
     visibility = ["//visibility:public"],
 )
 
+oci_load(
+    name = "worker.amd64.image.load",
+    image = ":worker.amd64.image",
+    repo_tags = ["ferrisrbe/worker:latest"],
+    visibility = ["//visibility:public"],
+)
+
+platform_transition_filegroup(
+    name = "worker.arm64",
+    srcs = ["//:worker"],
+    target_platform = "//platforms:linux_arm64",
+)
+
+tar(
+    name = "worker.arm64.layer",
+    srcs = [":worker.arm64"],
+    mtree = [
+        "./app/worker type=file content=$(execpath :worker.arm64)",
+    ],
+)
+
 oci_image(
-    name = "worker_image_arm64",
+    name = "worker.arm64.image",
     base = "@debian_bookworm_slim_linux_arm64_v8",
-    entrypoint = ["/app/rbe-worker"],
+    entrypoint = ["/app/worker"],
     env = {
         "RUST_LOG": "info",
         "WORKER_ID": "",
-        "SERVER_ENDPOINT": "http://rbe-server:9092",
-        "CAS_ENDPOINT": "http://bazel-remote:9094",
+        "SERVER_ENDPOINT": "http://server:9092",
+        "CAS_ENDPOINT": "http://cache:9094",
         "WORKER_TYPE": "default",
         "WORKER_LABELS": "os=linux,arch=arm64",
         "MAX_CONCURRENT": "4",
         "WORKDIR": "/workspace",
     },
-    exposed_ports = ["9093"],
-    tars = [":worker_layer_arm64"],
+    tars = [":worker.arm64.layer"],
     visibility = ["//visibility:public"],
 )
 
-# ============================================================================
-# Imágenes Multi-Plataforma (oci_image_index) y Carga de Docker
-# ============================================================================
+oci_load(
+    name = "worker.arm64.image.load",
+    image = ":worker.arm64.image",
+    repo_tags = ["ferrisrbe/worker:latest"],
+    visibility = ["//visibility:public"],
+)
 
-# Índice OCI del servidor
 oci_image_index(
-    name = "server_multiplatform",
+    name = "worker.image.multiplatform",
     images = [
-        ":server_image_amd64",
-        ":server_image_arm64",
+        ":worker.amd64.image",
+        ":worker.arm64.image",
     ],
     visibility = ["//visibility:public"],
 )
 
-# Push multi-plataforma del servidor (usa DOCKER_CONFIG o --credential-helper)
 oci_push(
-    name = "server_push",
-    image = ":server_multiplatform",
-    repository = "docker.io/xangcastle/ferris-server",
-    visibility = ["//visibility:public"],
-)
-
-# Target principal para cargar en Docker el servidor (ARM64 para Mac local)
-oci_load(
-    name = "server_load",
-    image = ":server_image_arm64",
-    repo_tags = ["ferrisrbe/server:latest"],
-    visibility = ["//visibility:public"],
-)
-
-# Target para cargar imagen AMD64 (para Linux/CI)
-oci_load(
-    name = "server_load_amd64",
-    image = ":server_image_amd64",
-    repo_tags = ["ferrisrbe/server:latest"],
-    visibility = ["//visibility:public"],
-)
-
-# Target para cargar imagen ARM64 (para CI multi-plataforma)
-oci_load(
-    name = "server_load_arm64",
-    image = ":server_image_arm64",
-    repo_tags = ["ferrisrbe/server:latest"],
-    visibility = ["//visibility:public"],
-)
-
-# Índice OCI del worker
-oci_image_index(
-    name = "worker_multiplatform",
-    images = [
-        ":worker_image_amd64",
-        ":worker_image_arm64",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-# Push multi-plataforma del worker (usa DOCKER_CONFIG o --credential-helper)
-oci_push(
-    name = "worker_push",
-    image = ":worker_multiplatform",
+    name = "worker.image.push",
+    image = ":worker.image.multiplatform",
     repository = "docker.io/xangcastle/ferris-worker",
     visibility = ["//visibility:public"],
 )
 
-# Target principal para cargar en Docker el worker (ARM64 para Mac local)
-oci_load(
-    name = "worker_load",
-    image = ":worker_image_arm64",
-    repo_tags = ["ferrisrbe/worker:latest"],
+platform_transition_filegroup(
+    name = "cache.amd64",
+    srcs = ["//:cache"],
+    target_platform = "//platforms:linux_amd64",
+)
+
+tar(
+    name = "cache.amd64.layer",
+    srcs = [":cache.amd64"],
+    mtree = [
+        "./app/cache type=file content=$(execpath :cache.amd64)",
+    ],
+)
+
+oci_image(
+    name = "cache.amd64.image",
+    base = "@debian_bookworm_slim_linux_amd64",
+    entrypoint = ["/app/cache"],
+    env = {
+        "RUST_LOG": "info",
+        "RBE_CACHE_PORT": "9094",
+        "RBE_CACHE_HTTP_PORT": "8080",
+        "RBE_CACHE_DIR": "/data",
+        "RBE_CACHE_MAX_SIZE_GB": "100",
+        "RBE_CACHE_AC_MAX_SIZE_GB": "10",
+    },
+    exposed_ports = [
+        "9094",
+        "8080",
+    ],
+    tars = [":cache.amd64.layer"],
     visibility = ["//visibility:public"],
 )
 
-# Target para cargar imagen AMD64 (para Linux/CI)
 oci_load(
-    name = "worker_load_amd64",
-    image = ":worker_image_amd64",
-    repo_tags = ["ferrisrbe/worker:latest"],
+    name = "cache.amd64.image.load",
+    image = ":cache.amd64.image",
+    repo_tags = ["ferrisrbe/cache:latest"],
     visibility = ["//visibility:public"],
 )
 
-# Target para cargar imagen ARM64 (para CI multi-plataforma)
+platform_transition_filegroup(
+    name = "cache.arm64",
+    srcs = ["//:cache"],
+    target_platform = "//platforms:linux_arm64",
+)
+
+tar(
+    name = "cache.arm64.layer",
+    srcs = [":cache.arm64"],
+    mtree = [
+        "./app/cache type=file content=$(execpath :cache.arm64)",
+    ],
+)
+
+oci_image(
+    name = "cache.arm64.image",
+    base = "@debian_bookworm_slim_linux_arm64_v8",
+    entrypoint = ["/app/cache"],
+    env = {
+        "RUST_LOG": "info",
+        "RBE_CACHE_PORT": "9094",
+        "RBE_CACHE_HTTP_PORT": "8080",
+        "RBE_CACHE_DIR": "/data",
+        "RBE_CACHE_MAX_SIZE_GB": "100",
+        "RBE_CACHE_AC_MAX_SIZE_GB": "10",
+    },
+    exposed_ports = [
+        "9094",
+        "8080",
+    ],
+    tars = [":cache.arm64.layer"],
+    visibility = ["//visibility:public"],
+)
+
 oci_load(
-    name = "worker_load_arm64",
-    image = ":worker_image_arm64",
-    repo_tags = ["ferrisrbe/worker:latest"],
+    name = "cache.arm64.image.load",
+    image = ":cache.arm64.image",
+    repo_tags = ["ferrisrbe/cache:latest"],
+    visibility = ["//visibility:public"],
+)
+
+oci_image_index(
+    name = "cache.image.multiplatform",
+    images = [
+        ":cache.amd64.image",
+        ":cache.arm64.image",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+oci_push(
+    name = "cache.image.push",
+    image = ":cache.image.multiplatform",
+    repository = "docker.io/xangcastle/ferris-cache",
+    visibility = ["//visibility:public"],
+)
+
+platform_transition_filegroup(
+    name = "bes.amd64",
+    srcs = ["//:bes"],
+    target_platform = "//platforms:linux_amd64",
+)
+
+tar(
+    name = "bes.amd64.layer",
+    srcs = [":bes.amd64"],
+    mtree = [
+        "./app/bes type=file content=$(execpath :bes.amd64)",
+    ],
+)
+
+oci_image(
+    name = "bes.amd64.image",
+    base = "@debian_bookworm_slim_linux_amd64",
+    entrypoint = ["/app/bes"],
+    env = {
+        "RUST_LOG": "info",
+        "RBE_BES_PORT": "9095",
+        "RBE_BES_UI_PORT": "9096",
+        "RBE_BES_DATA_DIR": "/data/bes",
+        "RBE_BES_STATIC_DIR": "/app/ui/dist",
+    },
+    exposed_ports = [
+        "9095",
+        "9096",
+    ],
+    tars = [":bes.amd64.layer"],
+    visibility = ["//visibility:public"],
+)
+
+oci_load(
+    name = "bes.amd64.image.load",
+    image = ":bes.amd64.image",
+    repo_tags = ["ferrisrbe/bes:latest"],
+    visibility = ["//visibility:public"],
+)
+
+platform_transition_filegroup(
+    name = "bes.arm64",
+    srcs = ["//:bes"],
+    target_platform = "//platforms:linux_arm64",
+)
+
+tar(
+    name = "bes.arm64.layer",
+    srcs = [":bes.arm64"],
+    mtree = [
+        "./app/bes type=file content=$(execpath :bes.arm64)",
+    ],
+)
+
+oci_image(
+    name = "bes.arm64.image",
+    base = "@debian_bookworm_slim_linux_arm64_v8",
+    entrypoint = ["/app/bes"],
+    env = {
+        "RUST_LOG": "info",
+        "RBE_BES_PORT": "9095",
+        "RBE_BES_UI_PORT": "9096",
+        "RBE_BES_DATA_DIR": "/data/bes",
+        "RBE_BES_STATIC_DIR": "/app/ui/dist",
+    },
+    exposed_ports = [
+        "9095",
+        "9096",
+    ],
+    tars = [":bes.arm64.layer"],
+    visibility = ["//visibility:public"],
+)
+
+oci_load(
+    name = "bes.arm64.image.load",
+    image = ":bes.arm64.image",
+    repo_tags = ["ferrisrbe/bes:latest"],
+    visibility = ["//visibility:public"],
+)
+
+oci_image_index(
+    name = "bes.image.multiplatform",
+    images = [
+        ":bes.amd64.image",
+        ":bes.arm64.image",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+oci_push(
+    name = "bes.image.push",
+    image = ":bes.image.multiplatform",
+    repository = "docker.io/xangcastle/ferris-bes",
     visibility = ["//visibility:public"],
 )

@@ -1,12 +1,10 @@
-
-
-use tonic::{Request, Response, Status, body::BoxBody};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Instant;
+use tonic::{body::BoxBody, Request, Response, Status};
 use tower::{Layer, Service};
 use tracing::{info, warn};
-use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub struct LoggingLayer;

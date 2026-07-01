@@ -68,4 +68,4 @@ data:
   
   # Endpoints
   SERVER_ENDPOINT: "http://{{ include "ferrisrbe.fullname" . }}-server:9092"
-  CAS_ENDPOINT: "http://{{ include "ferrisrbe.fullname" . }}-bazel-remote:9094"
+  CAS_ENDPOINT: "http://{{ include "ferrisrbe.fullname" . }}-cache:9094"

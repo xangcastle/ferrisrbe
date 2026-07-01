@@ -1,9 +1,8 @@
-package(default_visibility = ["//visibility:public"])
-
 load("@rules_cc//cc:defs.bzl", "cc_toolchain")
 load(":cc_toolchain_config.bzl", "gcc_toolchain_config")
 
-# Platform for Linux ARM64 remote execution
+package(default_visibility = ["//visibility:public"])
+
 platform(
     name = "linux_arm64",
     constraint_values = [
@@ -16,7 +15,6 @@ platform(
     },
 )
 
-# Platform for Linux AMD64 remote execution (ferrisrbe-amd64 cluster)
 platform(
     name = "linux_amd64",
     constraint_values = [
@@ -29,7 +27,6 @@ platform(
     },
 )
 
-# GCC Toolchain for Linux ARM64
 gcc_toolchain_config(
     name = "gcc_linux_arm64_config",
     cpu = "arm64",
@@ -37,8 +34,6 @@ gcc_toolchain_config(
 
 cc_toolchain(
     name = "gcc_linux_arm64",
-    toolchain_identifier = "gcc_linux",
-    toolchain_config = ":gcc_linux_arm64_config",
     all_files = ":empty",
     ar_files = ":empty",
     as_files = ":empty",
@@ -48,23 +43,24 @@ cc_toolchain(
     objcopy_files = ":empty",
     strip_files = ":empty",
     supports_param_files = 0,
+    toolchain_config = ":gcc_linux_arm64_config",
+    toolchain_identifier = "gcc_linux",
 )
 
 toolchain(
     name = "gcc_linux_arm64_toolchain",
-    toolchain = ":gcc_linux_arm64",
-    toolchain_type = "@bazel_tools//tools/cpp:cc_toolchain_type",
-    target_compatible_with = [
-        "@platforms//os:linux",
-        "@platforms//cpu:arm64",
-    ],
     exec_compatible_with = [
         "@platforms//os:linux",
         "@platforms//cpu:arm64",
     ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
+    toolchain = ":gcc_linux_arm64",
+    toolchain_type = "@bazel_tools//tools/cpp:cc_toolchain_type",
 )
 
-# GCC Toolchain for Linux AMD64 (ferrisrbe-amd64 cluster)
 gcc_toolchain_config(
     name = "gcc_linux_amd64_config",
     cpu = "x86_64",
@@ -72,8 +68,6 @@ gcc_toolchain_config(
 
 cc_toolchain(
     name = "gcc_linux_amd64",
-    toolchain_identifier = "gcc_linux",
-    toolchain_config = ":gcc_linux_amd64_config",
     all_files = ":empty",
     ar_files = ":empty",
     as_files = ":empty",
@@ -83,20 +77,22 @@ cc_toolchain(
     objcopy_files = ":empty",
     strip_files = ":empty",
     supports_param_files = 0,
+    toolchain_config = ":gcc_linux_amd64_config",
+    toolchain_identifier = "gcc_linux",
 )
 
 toolchain(
     name = "gcc_linux_amd64_toolchain",
-    toolchain = ":gcc_linux_amd64",
-    toolchain_type = "@bazel_tools//tools/cpp:cc_toolchain_type",
-    target_compatible_with = [
-        "@platforms//os:linux",
-        "@platforms//cpu:x86_64",
-    ],
     exec_compatible_with = [
         "@platforms//os:linux",
         "@platforms//cpu:x86_64",
     ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    toolchain = ":gcc_linux_amd64",
+    toolchain_type = "@bazel_tools//tools/cpp:cc_toolchain_type",
 )
 
 filegroup(name = "empty")

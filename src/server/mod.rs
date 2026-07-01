@@ -61,7 +61,7 @@ pub struct RbeServer {
 impl RbeServer {
     pub async fn new(config: RbeServerConfig) -> Result<Self, Box<dyn std::error::Error>> {
         let cas_endpoint =
-            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "bazel-remote:9094".to_string());
+            std::env::var("CAS_ENDPOINT").unwrap_or_else(|_| "rbe-cache:9094".to_string());
 
         info!("Initializing gRPC CAS backend: endpoint={}", cas_endpoint);
         let cas_backend: SharedCasBackend = Arc::new(GrpcCasBackend::new(&cas_endpoint).await?);
@@ -120,8 +120,9 @@ impl RbeServer {
         info!("ExecutionEngine started");
 
         let byte_stream_service = byte_stream::ByteStreamService::new(self.cas_backend.clone());
-        let action_cache_service =
-            action_cache_service::ActionCacheService::new(self.l1_cache.clone());
+        let action_cache_service = action_cache_service::ActionCacheService::new(
+            self.l1_cache.clone() as Arc<dyn crate::cache::action_cache::ActionCacheStore>,
+        );
         let cas_service = cas_service::CasService::new(self.cas_backend.clone());
         let execution_service = execution_service::ExecutionService::new(
             self.scheduler.clone(),
@@ -130,7 +131,7 @@ impl RbeServer {
             self.results_store.clone(),
             self.cas_backend.clone(),
         );
-        let capabilities_service = capabilities_service::CapabilitiesService::new();
+        let capabilities_service = capabilities_service::CapabilitiesService::new(true);
         let worker_service = worker_service::WorkerServiceImpl::new(
             self.worker_registry.clone(),
             self.execution_engine.clone(),

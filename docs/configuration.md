@@ -9,8 +9,7 @@ FerrisRBE follows [12-Factor App](https://12factor.net/) methodology. All config
 | `RBE_PORT` | `9092` | Server gRPC port |
 | `RBE_BIND_ADDRESS` | `0.0.0.0` | Bind address |
 | `RUST_LOG` | `info` | Log level (trace/debug/info/warn/error) |
-| `CAS_ENDPOINT` | `bazel-remote:9094` | CAS (bazel-remote) endpoint |
-| `REDIS_ENDPOINT` | `redis:6379` | Redis endpoint for metadata |
+| `CAS_ENDPOINT` | `rbe-cache:9094` | Native cache server (rbe-cache) endpoint |
 | `RBE_L1_CACHE_CAPACITY` | `100000` | L1 action cache entry limit |
 | `RBE_L1_CACHE_TTL_SECS` | `3600` | L1 cache TTL in seconds |
 | `RBE_MAX_BATCH_SIZE` | `4194304` | Max batch size for CAS operations (4MB) |
@@ -34,7 +33,7 @@ FerrisRBE follows [12-Factor App](https://12factor.net/) methodology. All config
 |----------|---------|-------------|
 | `WORKER_ID` | (hostname) | Unique worker identifier |
 | `SERVER_ENDPOINT` | `http://rbe-server:9092` | RBE server endpoint |
-| `CAS_ENDPOINT` | `http://bazel-remote:9094` | CAS endpoint |
+| `CAS_ENDPOINT` | `http://rbe-cache:9094` | Native cache server endpoint |
 | `WORKER_TYPE` | `default` | Worker type (default, highcpu, gpu) |
 | `WORKER_LABELS` | `os=linux,arch=amd64` | Comma-separated labels |
 | `MAX_CONCURRENT` | `4` | Maximum concurrent executions |

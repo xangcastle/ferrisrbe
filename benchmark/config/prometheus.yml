@@ -23,12 +23,6 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 
-  # FerrisRBE Server Metrics
-  - job_name: 'ferrisrbe-server'
-    static_configs:
-      - targets: ['ferrisrbe-server:9093']
-    metrics_path: /metrics
-
   # FerrisRBE via cAdvisor (fallback)
   - job_name: 'ferrisrbe-cadvisor'
     static_configs:

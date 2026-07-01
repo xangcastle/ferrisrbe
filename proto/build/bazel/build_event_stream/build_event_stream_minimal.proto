@@ -1,0 +1,805 @@
+// Copyright 2016 The Bazel Authors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Simplified/minimal variant of build_event_stream.proto.
+// Internal Bazel proto dependencies have been replaced by google.protobuf.Any
+// or omitted so that this file compiles standalone with only google/protobuf
+// well-known types.
+
+syntax = "proto3";
+
+package build_event_stream;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.google.devtools.build.lib.buildeventstream";
+option java_outer_classname = "BuildEventStreamProtos";
+
+// Identifier for a build event. It is deliberately structured to also provide
+message BuildEventId {
+  message UnknownBuildEventId {
+    string details = 1;
+  }
+
+  message ProgressId {
+    int32 opaque_count = 1;
+  }
+
+  message BuildStartedId {}
+
+  message UnstructuredCommandLineId {}
+
+  message StructuredCommandLineId {
+    string command_line_label = 1;
+  }
+
+  message WorkspaceStatusId {}
+
+  message OptionsParsedId {}
+
+  message FetchId {
+    string url = 1;
+
+    enum Downloader {
+      UNKNOWN = 0;
+      HTTP = 1;
+      GRPC = 2;
+    }
+    Downloader downloader = 2;
+  }
+
+  message PatternExpandedId {
+    repeated string pattern = 1;
+  }
+
+  message WorkspaceConfigId {}
+
+  message BuildMetadataId {}
+
+  message TargetConfiguredId {
+    string label = 1;
+    string aspect = 2;
+  }
+
+  message NamedSetOfFilesId {
+    string id = 1;
+  }
+
+  message ConfigurationId {
+    string id = 1;
+  }
+
+  message TargetCompletedId {
+    string label = 1;
+    ConfigurationId configuration = 3;
+    string aspect = 2;
+  }
+
+  message ActionCompletedId {
+    string primary_output = 1;
+    string label = 2;
+    ConfigurationId configuration = 3;
+  }
+
+  message UnconfiguredLabelId {
+    string label = 1;
+  }
+
+  message ConfiguredLabelId {
+    string label = 1;
+    ConfigurationId configuration = 2;
+  }
+
+  message TestResultId {
+    string label = 1;
+    ConfigurationId configuration = 5;
+    int32 run = 2;
+    int32 shard = 3;
+    int32 attempt = 4;
+  }
+
+  message TestProgressId {
+    string label = 1;
+    ConfigurationId configuration = 2;
+    int32 run = 3;
+    int32 shard = 4;
+    int32 attempt = 5;
+    int32 opaque_count = 6;
+  }
+
+  message TestSummaryId {
+    string label = 1;
+    ConfigurationId configuration = 2;
+  }
+
+  message TargetSummaryId {
+    string label = 1;
+    ConfigurationId configuration = 2;
+  }
+
+  message BuildFinishedId {}
+
+  message BuildToolLogsId {}
+
+  message BuildMetricsId {}
+
+  message ConvenienceSymlinksIdentifiedId {}
+
+  message ExecRequestId {}
+
+  message SkyValueUploadedId {
+    string key = 1;
+  }
+
+  reserved 27;
+
+  oneof id {
+    UnknownBuildEventId unknown = 1;
+    ProgressId progress = 2;
+    BuildStartedId started = 3;
+    PatternExpandedId pattern = 4;
+    TargetCompletedId target_completed = 5;
+    ActionCompletedId action_completed = 6;
+    TestSummaryId test_summary = 7;
+    TestResultId test_result = 8;
+    BuildFinishedId build_finished = 9;
+    PatternExpandedId pattern_skipped = 10;
+    UnstructuredCommandLineId unstructured_command_line = 11;
+    OptionsParsedId options_parsed = 12;
+    NamedSetOfFilesId named_set = 13;
+    WorkspaceStatusId workspace_status = 14;
+    ConfigurationId configuration = 15;
+    TargetConfiguredId target_configured = 16;
+    FetchId fetch = 17;
+    StructuredCommandLineId structured_command_line = 18;
+    UnconfiguredLabelId unconfigured_label = 19;
+    BuildToolLogsId build_tool_logs = 20;
+    ConfiguredLabelId configured_label = 21;
+    BuildMetricsId build_metrics = 22;
+    WorkspaceConfigId workspace = 23;
+    BuildMetadataId build_metadata = 24;
+    ConvenienceSymlinksIdentifiedId convenience_symlinks_identified = 25;
+    TargetSummaryId target_summary = 26;
+    ExecRequestId exec_request = 28;
+    TestProgressId test_progress = 29;
+    SkyValueUploadedId skyvalue_uploaded = 31;
+  }
+}
+
+message Progress {
+  string stdout = 1;
+  string stderr = 2;
+}
+
+message Aborted {
+  enum AbortReason {
+    UNKNOWN = 0;
+    USER_INTERRUPTED = 1;
+    TIME_OUT = 2;
+    REMOTE_ENVIRONMENT_FAILURE = 3;
+    INTERNAL = 4;
+    LOADING_FAILURE = 5;
+    ANALYSIS_FAILURE = 6;
+    SKIPPED = 7;
+    NO_ANALYZE = 8;
+    NO_BUILD = 9;
+    INCOMPLETE = 10;
+    OUT_OF_MEMORY = 11;
+  }
+  AbortReason reason = 1;
+  string description = 2;
+}
+
+message BuildStarted {
+  string uuid = 1;
+  int64 start_time_millis = 2 [deprecated = true];
+  google.protobuf.Timestamp start_time = 9;
+  string build_tool_version = 3;
+  string options_description = 4;
+  string command = 5;
+  string working_directory = 6;
+  string workspace_directory = 7;
+  int64 server_pid = 8;
+  string host = 10;
+  string user = 11;
+  JavaVersionInfo java_version_info = 12;
+}
+
+message JavaVersionInfo {
+  string java_version = 1;
+  int32 java_major_version = 2;
+  int32 java_minor_version = 3;
+}
+
+message BuildFinished {
+  message ExitCode {
+    string name = 1;
+    int32 code = 2;
+  }
+
+  message AnomalyReport {
+    bool was_suspended = 1;
+  }
+
+  bool overall_success = 1 [deprecated = true];
+  ExitCode exit_code = 3;
+  int64 finish_time_millis = 2 [deprecated = true];
+  google.protobuf.Timestamp finish_time = 5;
+  AnomalyReport anomaly_report = 4 [deprecated = true];
+  google.protobuf.Any failure_detail = 6;
+}
+
+enum TestSize {
+  UNKNOWN = 0;
+  SMALL = 1;
+  MEDIUM = 2;
+  LARGE = 3;
+  ENORMOUS = 4;
+}
+
+message TargetConfigured {
+  string target_kind = 1;
+  TestSize test_size = 2;
+  repeated string tag = 3;
+  string actual = 4;
+}
+
+message File {
+  repeated string path_prefix = 4;
+  string name = 1;
+  oneof file {
+    string uri = 2;
+    bytes contents = 3;
+    string symlink_target_path = 7;
+  }
+  string digest = 5;
+  int64 length = 6;
+}
+
+message NamedSetOfFiles {
+  repeated File files = 1;
+  repeated BuildEventId.NamedSetOfFilesId file_sets = 2;
+}
+
+message OutputGroup {
+  reserved 2;
+  string name = 1;
+  repeated BuildEventId.NamedSetOfFilesId file_sets = 3;
+  bool incomplete = 4;
+  repeated File inline_files = 5;
+}
+
+message TargetComplete {
+  bool success = 1;
+  string target_kind = 5 [deprecated = true];
+  TestSize test_size = 6 [deprecated = true];
+  repeated OutputGroup output_group = 2;
+  repeated File important_output = 4 [deprecated = true];
+  repeated File directory_output = 8;
+  repeated string tag = 3;
+  int64 test_timeout_seconds = 7 [deprecated = true];
+  google.protobuf.Duration test_timeout = 10;
+  google.protobuf.Any failure_detail = 9;
+}
+
+enum TestStatus {
+  NO_STATUS = 0;
+  PASSED = 1;
+  FLAKY = 2;
+  TIMEOUT = 3;
+  FAILED = 4;
+  INCOMPLETE = 5;
+  REMOTE_FAILURE = 6;
+  FAILED_TO_BUILD = 7;
+  TOOL_HALTED_BEFORE_TESTING = 8;
+}
+
+message ActionExecuted {
+  reserved 10;
+  bool success = 1;
+  string type = 8;
+  int32 exit_code = 2;
+  File stdout = 3;
+  File stderr = 4;
+  string label = 5 [deprecated = true];
+  BuildEventId.ConfigurationId configuration = 7 [deprecated = true];
+  File primary_output = 6;
+  repeated string command_line = 9;
+  google.protobuf.Any failure_detail = 11;
+  google.protobuf.Timestamp start_time = 12;
+  google.protobuf.Timestamp end_time = 13;
+  repeated google.protobuf.Any strategy_details = 14;
+}
+
+message TestResult {
+  reserved 1;
+  TestStatus status = 5;
+  string status_details = 9;
+  bool cached_locally = 4;
+  int64 test_attempt_start_millis_epoch = 6 [deprecated = true];
+  google.protobuf.Timestamp test_attempt_start = 10;
+  int64 test_attempt_duration_millis = 3 [deprecated = true];
+  google.protobuf.Duration test_attempt_duration = 11;
+  repeated File test_action_output = 2;
+  repeated string warning = 7;
+
+  message ExecutionInfo {
+    int32 timeout_seconds = 1 [deprecated = true];
+    string strategy = 2;
+    bool cached_remotely = 6;
+    int32 exit_code = 7;
+    string hostname = 3;
+
+    message TimingBreakdown {
+      repeated TimingBreakdown child = 1;
+      string name = 2;
+      int64 time_millis = 3 [deprecated = true];
+      google.protobuf.Duration time = 4;
+    }
+    TimingBreakdown timing_breakdown = 4;
+
+    message ResourceUsage {
+      string name = 1;
+      int64 value = 2;
+    }
+    repeated ResourceUsage resource_usage = 5;
+  }
+  ExecutionInfo execution_info = 8;
+}
+
+message TestProgress {
+  string uri = 1;
+}
+
+message TestSummary {
+  TestStatus overall_status = 5;
+  int32 total_run_count = 1;
+  int32 run_count = 10;
+  int32 attempt_count = 15;
+  int32 shard_count = 11;
+  repeated File passed = 3;
+  repeated File failed = 4;
+  int32 total_num_cached = 6;
+  int64 first_start_time_millis = 7 [deprecated = true];
+  google.protobuf.Timestamp first_start_time = 13;
+  int64 last_stop_time_millis = 8 [deprecated = true];
+  google.protobuf.Timestamp last_stop_time = 14;
+  int64 total_run_duration_millis = 9 [deprecated = true];
+  google.protobuf.Duration total_run_duration = 12;
+}
+
+message TargetSummary {
+  bool overall_build_success = 1;
+  TestStatus overall_test_status = 2;
+}
+
+message Configuration {
+  string mnemonic = 1;
+  string platform_name = 2;
+  string cpu = 3;
+  map<string, string> make_variable = 4;
+  bool is_tool = 5;
+}
+
+message BuildToolLogs {
+  repeated File log = 1;
+}
+
+message BuildMetrics {
+  message ActionSummary {
+    int64 actions_created = 1;
+    int64 actions_created_not_including_aspects = 3;
+    int64 actions_executed = 2;
+
+    message ActionData {
+      string mnemonic = 1;
+      int64 actions_executed = 2;
+      int64 first_started_ms = 3;
+      int64 last_ended_ms = 4;
+      google.protobuf.Duration system_time = 5;
+      google.protobuf.Duration user_time = 6;
+      int64 actions_created = 7;
+    }
+    repeated ActionData action_data = 4;
+
+    int64 remote_cache_hits = 5 [deprecated = true];
+
+    message RunnerCount {
+      string name = 1;
+      int32 count = 2;
+      string exec_kind = 3;
+    }
+    repeated RunnerCount runner_count = 6;
+
+    google.protobuf.Any action_cache_statistics = 7;
+  }
+  ActionSummary action_summary = 1;
+
+  message MemoryMetrics {
+    int64 used_heap_size_post_build = 1;
+    int64 peak_post_gc_heap_size = 2;
+    int64 peak_post_gc_tenured_space_heap_size = 4;
+    int64 peak_post_gc_heap_size_during_execution = 5;
+    int64 peak_post_gc_tenured_space_heap_size_during_execution = 6;
+
+    message GarbageMetrics {
+      string type = 1;
+      int64 garbage_collected = 2;
+    }
+    repeated GarbageMetrics garbage_metrics = 3;
+  }
+  MemoryMetrics memory_metrics = 2;
+
+  message TargetMetrics {
+    int64 targets_loaded = 1;
+    int64 targets_configured = 2;
+    int64 targets_configured_not_including_aspects = 3;
+  }
+  TargetMetrics target_metrics = 3;
+
+  message PackageMetrics {
+    int64 packages_loaded = 1;
+    google.protobuf.Any package_load_metrics = 2;
+  }
+  PackageMetrics package_metrics = 4;
+
+  message TimingMetrics {
+    int64 cpu_time_in_ms = 1;
+    int64 wall_time_in_ms = 2;
+    int64 analysis_phase_time_in_ms = 3;
+    int64 execution_phase_time_in_ms = 4;
+    int64 actions_execution_start_in_ms = 5;
+    google.protobuf.Duration critical_path_time = 6;
+  }
+  TimingMetrics timing_metrics = 5;
+
+  message CumulativeMetrics {
+    int32 num_analyses = 11;
+    int32 num_builds = 12;
+  }
+  CumulativeMetrics cumulative_metrics = 6;
+
+  message ArtifactMetrics {
+    reserved 1;
+
+    message FilesMetric {
+      int64 size_in_bytes = 1;
+      int32 count = 2;
+    }
+
+    FilesMetric source_artifacts_read = 2;
+    FilesMetric output_artifacts_seen = 3;
+    FilesMetric output_artifacts_from_action_cache = 4;
+    FilesMetric top_level_artifacts = 5;
+  }
+  ArtifactMetrics artifact_metrics = 7;
+
+  message EvaluationStat {
+    string skyfunction_name = 1;
+    int64 count = 2;
+  }
+
+  message BuildGraphMetrics {
+    int32 action_lookup_value_count = 1;
+    int32 action_count = 2;
+    int32 output_artifact_count = 3;
+    int32 post_invocation_skyframe_node_count = 4;
+    int32 action_lookup_value_count_not_including_aspects = 5;
+    int32 action_count_not_including_aspects = 6;
+    int32 input_file_configured_target_count = 7;
+    int32 output_file_configured_target_count = 8;
+    int32 other_configured_target_count = 9;
+    repeated EvaluationStat dirtied_values = 10;
+    repeated EvaluationStat changed_values = 11;
+    repeated EvaluationStat built_values = 12;
+    repeated EvaluationStat cleaned_values = 13;
+
+    message RuleClassCount {
+      string key = 1;
+      string rule_class = 2;
+      uint64 count = 3;
+      uint64 action_count = 4;
+    }
+    repeated RuleClassCount rule_class = 14;
+
+    message AspectCount {
+      string key = 1;
+      string aspect_name = 2;
+      uint64 count = 3;
+      uint64 action_count = 4;
+    }
+    repeated AspectCount aspect = 15;
+
+    reserved 16;
+
+    repeated EvaluationStat evaluated_values = 17;
+
+    message StarlarkProviderStats {
+      int32 total_count = 1;
+
+      message StalarkProvider {
+        string name = 1;
+        string location = 2;
+        int32 count = 3;
+
+        message Schema {
+          int32 field_count = 1;
+        }
+        Schema schema = 5;
+      }
+      repeated StalarkProvider providers = 3;
+    }
+    StarlarkProviderStats starlark_provider_stats = 18;
+  }
+  BuildGraphMetrics build_graph_metrics = 8;
+
+  message WorkerMetrics {
+    int32 worker_id = 1 [deprecated = true];
+    uint32 process_id = 2;
+    string mnemonic = 3;
+    bool is_multiplex = 4;
+    bool is_sandbox = 5;
+    bool is_measurable = 6;
+    repeated WorkerStats worker_stats = 7;
+    repeated uint32 worker_ids = 8;
+    int64 worker_key_hash = 9;
+    WorkerStatus worker_status = 10;
+    int64 actions_executed = 11;
+    google.protobuf.Any code = 12;
+    int64 prior_actions_executed = 13;
+
+    enum WorkerStatus {
+      NOT_STARTED = 0;
+      ALIVE = 1;
+      KILLED_DUE_TO_MEMORY_PRESSURE = 2;
+      KILLED_UNKNOWN = 3;
+      KILLED_DUE_TO_INTERRUPTED_EXCEPTION = 4;
+      KILLED_DUE_TO_IO_EXCEPTION = 5;
+      KILLED_DUE_TO_USER_EXEC_EXCEPTION = 6;
+    }
+
+    message WorkerStats {
+      int64 collect_time_in_ms = 1;
+      int32 worker_memory_in_kb = 2;
+      int64 last_action_start_time_in_ms = 3;
+      int32 prior_worker_memory_in_kb = 4;
+    }
+  }
+  repeated WorkerMetrics worker_metrics = 9;
+
+  message NetworkMetrics {
+    message SystemNetworkStats {
+      uint64 bytes_sent = 1;
+      uint64 bytes_recv = 2;
+      uint64 packets_sent = 3;
+      uint64 packets_recv = 4;
+      uint64 peak_bytes_sent_per_sec = 5;
+      uint64 peak_bytes_recv_per_sec = 6;
+      uint64 peak_packets_sent_per_sec = 7;
+      uint64 peak_packets_recv_per_sec = 8;
+    }
+    SystemNetworkStats system_network_stats = 1;
+  }
+  NetworkMetrics network_metrics = 10;
+
+  message WorkerPoolMetrics {
+    message WorkerPoolStats {
+      int32 hash = 1;
+      string mnemonic = 2;
+      int64 created_count = 3;
+      int64 destroyed_count = 4;
+      int64 evicted_count = 5;
+      int64 user_exec_exception_destroyed_count = 6;
+      int64 io_exception_destroyed_count = 7;
+      int64 interrupted_exception_destroyed_count = 8;
+      int64 unknown_destroyed_count = 9;
+      int64 alive_count = 10;
+    }
+    repeated WorkerPoolStats worker_pool_stats = 1;
+  }
+  WorkerPoolMetrics worker_pool_metrics = 11;
+
+  message DynamicExecutionMetrics {
+    message RaceStatistics {
+      string mnemonic = 1;
+      string local_runner = 2;
+      string remote_runner = 3;
+      int32 local_wins = 4;
+      int32 remote_wins = 5;
+    }
+    repeated RaceStatistics race_statistics = 1;
+  }
+  DynamicExecutionMetrics dynamic_execution_metrics = 12;
+
+  message Distribution {
+    message HistogramBucket {
+      int64 min = 1;
+      int64 max = 2;
+      int64 count = 3;
+    }
+    repeated HistogramBucket histogram_bucket = 1;
+  }
+
+  message RemoteAnalysisCacheStatistics {
+    message Entry {
+      string key = 1;
+      int64 value = 2;
+    }
+
+    int64 cache_hits = 1;
+    int64 cache_misses = 2;
+    int64 value_store_value_bytes_received = 3;
+    int64 value_store_value_bytes_sent = 4;
+    int64 value_store_key_bytes_sent = 5;
+    int64 value_store_write_ops = 6;
+    int64 value_store_read_ops_successful = 7;
+    int64 value_store_read_ops_not_found = 8;
+    int64 value_store_read_batches = 10;
+    int64 value_store_write_batches = 11;
+    int64 analysis_cache_bytes_received = 12;
+    int64 analysis_cache_key_bytes_sent = 13;
+    int64 analysis_cache_ops = 14;
+    int64 analysis_cache_batches = 15;
+    google.protobuf.Any metadata_lookup_result = 16;
+    Distribution value_store_read_latency_micros = 17;
+    Distribution value_store_read_batch_latency_micros = 18;
+    Distribution value_store_write_latency_micros = 19;
+    Distribution value_store_write_batch_latency_micros = 20;
+    Distribution analysis_cache_read_latency_micros = 21;
+    Distribution analysis_cache_read_batch_latency_micros = 22;
+    repeated Entry cache_misses_by_reason = 23;
+    repeated Entry cache_misses_by_skyfunction = 24;
+    repeated Entry cache_hits_by_skyfunction = 25;
+
+    message InvalidationLookupMetrics {
+      int64 latency_micros = 1;
+
+      enum Status {
+        STATUS_UNSPECIFIED = 0;
+        OK = 1;
+        TIMED_OUT = 2;
+        ERROR = 3;
+      }
+      Status status = 2;
+      int32 num_keys = 3;
+      int32 num_invalidated_keys = 4;
+    }
+    InvalidationLookupMetrics invalidation_lookup_metrics = 27;
+    int64 serialization_exception_count = 28;
+  }
+  RemoteAnalysisCacheStatistics remote_analysis_cache_statistics = 13;
+
+  message BzlMetrics {
+    int32 bzl_file_count = 1;
+
+    message BzlFileMetrics {
+      string path = 1;
+      int64 size = 2;
+    }
+    repeated BzlFileMetrics bzl_file_metrics = 2;
+  }
+  BzlMetrics bzl_metrics = 14;
+}
+
+message WorkspaceConfig {
+  string local_exec_root = 1;
+}
+
+message UnstructuredCommandLine {
+  repeated string args = 1;
+}
+
+message OptionsParsed {
+  repeated string startup_options = 1;
+  repeated string explicit_startup_options = 2;
+  repeated string cmd_line = 3;
+  repeated string explicit_cmd_line = 4;
+  google.protobuf.Any invocation_policy = 5;
+  string tool_tag = 6;
+}
+
+message Fetch {
+  bool success = 1;
+}
+
+message WorkspaceStatus {
+  message Item {
+    string key = 1;
+    string value = 2;
+  }
+  repeated Item item = 1;
+}
+
+message BuildMetadata {
+  map<string, string> metadata = 1;
+}
+
+message PatternExpanded {
+  message TestSuiteExpansion {
+    string suite_label = 1;
+    repeated string test_labels = 2;
+  }
+  repeated TestSuiteExpansion test_suite_expansions = 1;
+}
+
+message ConvenienceSymlinksIdentified {
+  repeated ConvenienceSymlink convenience_symlinks = 1;
+}
+
+message ConvenienceSymlink {
+  enum Action {
+    UNKNOWN = 0;
+    CREATE = 1;
+    DELETE = 2;
+  }
+  string path = 1;
+  Action action = 2;
+  string target = 3;
+}
+
+message ExecRequestConstructed {
+  bytes working_directory = 1;
+  repeated bytes argv = 2;
+  repeated EnvironmentVariable environment_variable = 3;
+  repeated bytes environment_variable_to_clear = 4;
+  bool should_exec = 5;
+}
+
+message EnvironmentVariable {
+  bytes name = 1;
+  bytes value = 2;
+}
+
+message SkyValueUploaded {
+  string key = 1;
+  string version = 2;
+  string fingerprint = 3;
+}
+
+message BuildEvent {
+  reserved 11, 19;
+  BuildEventId id = 1;
+  repeated BuildEventId children = 2;
+  bool last_message = 20;
+
+  oneof payload {
+    Progress progress = 3;
+    Aborted aborted = 4;
+    BuildStarted started = 5;
+    PatternExpanded expanded = 6;
+    ActionExecuted action = 7;
+    TargetComplete completed = 8;
+    TestSummary test_summary = 9;
+    TestResult test_result = 10;
+    UnstructuredCommandLine unstructured_command_line = 12;
+    OptionsParsed options_parsed = 13;
+    BuildFinished finished = 14;
+    NamedSetOfFiles named_set_of_files = 15;
+    WorkspaceStatus workspace_status = 16;
+    Configuration configuration = 17;
+    TargetConfigured configured = 18;
+    google.protobuf.Any structured_command_line = 22;
+    BuildToolLogs build_tool_logs = 23;
+    BuildMetrics build_metrics = 24;
+    WorkspaceConfig workspace_info = 25;
+    BuildMetadata build_metadata = 26;
+    ConvenienceSymlinksIdentified convenience_symlinks_identified = 27;
+    TargetSummary target_summary = 28;
+    ExecRequestConstructed exec_request = 29;
+    TestProgress test_progress = 30;
+    SkyValueUploaded skyvalue_uploaded = 32;
+  }
+}

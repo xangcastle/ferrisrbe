@@ -68,7 +68,7 @@ spec:
           emptyDir: {}
         - name: cas-storage
           emptyDir:
-            sizeLimit: {{ .Values.bazelRemote.storage.size }}
+            sizeLimit: {{ .Values.cache.storage.size }}
       nodeSelector:
         {{- toYaml .Values.server.nodeSelector | nindent 8 }}
       tolerations:

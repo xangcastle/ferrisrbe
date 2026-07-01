@@ -1,13 +1,3 @@
-"""Build file con genrules de prueba para Bazel 7.4+
-
-Este archivo define:
-1. Una genrule cacheable (genera output determinístico)
-2. Una genrule no cacheable (usa timestamp/no-cache tag)
-3. Una dependencia entre ellas para probar el grafo de build
-"""
-
-# Genrule cacheable: Genera un archivo con contenido determinístico
-# Esta regla debería ser cacheada después de la primera ejecución
 genrule(
     name = "cacheable_step",
     srcs = [],
@@ -25,8 +15,6 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
-# Genrule no cacheable: Genera output con timestamp único
-# Esta regla NUNCA debería ser cacheada debido a el tag "no-cache"
 genrule(
     name = "non_cacheable_step",
     srcs = [":cacheable_step"],
@@ -42,14 +30,13 @@ genrule(
         echo "Random: $$(cat /dev/urandom | head -c 8 | xxd -p)" >> $@
     """,
     tags = [
+        "local",
         "no-cache",
         "no-remote-cache",
-        "local",
     ],
     visibility = ["//visibility:public"],
 )
 
-# Target final que agrupa ambos pasos
 filegroup(
     name = "all_outputs",
     srcs = [
@@ -59,7 +46,6 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Target de convenio para testing rápido
 genrule(
     name = "test_summary",
     srcs = [":non_cacheable_step"],

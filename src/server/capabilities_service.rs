@@ -14,12 +14,14 @@ use crate::version::VersionManager;
 pub struct CapabilitiesService {
     #[allow(dead_code)]
     version_manager: Arc<VersionManager>,
+    exec_enabled: bool,
 }
 
 impl CapabilitiesService {
-    pub fn new() -> Self {
+    pub fn new(exec_enabled: bool) -> Self {
         Self {
             version_manager: Arc::new(VersionManager::new()),
+            exec_enabled,
         }
     }
 
@@ -63,7 +65,7 @@ impl CapabilitiesService {
             }),
             execution_capabilities: Some(ExecutionCapabilities {
                 digest_function: 1,
-                exec_enabled: true,
+                exec_enabled: self.exec_enabled,
                 // REAPI v2.4: execution_priority_capabilities uses 'priorities'
                 execution_priority_capabilities: Some(PriorityCapabilities {
                     priorities: vec![priority_range],
@@ -99,7 +101,7 @@ impl CapabilitiesService {
 
 impl Default for CapabilitiesService {
     fn default() -> Self {
-        Self::new()
+        Self::new(true)
     }
 }
 

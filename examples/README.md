@@ -33,8 +33,8 @@ Start the port-forwards in separate terminals:
 # Terminal 1: RBE Server (execution)
 kubectl port-forward -n rbe svc/rbe-server 9092:9092
 
-# Terminal 2: Bazel Remote (cache)
-kubectl port-forward -n rbe svc/bazel-remote 9094:9094
+# Terminal 2: FerrisRBE cache server
+kubectl port-forward -n rbe svc/rbe-cache 9094:9094
 ```
 
 ## Running the Enterprise Stress Tests

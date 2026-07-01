@@ -1,5 +1,9 @@
-target
+.cache
 .idea
-MODULE.bazel.lock
-logs_*
 .ijwb
+logs_*
+target
+MODULE.bazel.lock
+node_modules
+ui/dist
+.bes
