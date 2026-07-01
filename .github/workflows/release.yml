@@ -51,22 +51,19 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
-      # Build and push multi-platform images using oci_push
-      # oci_push reads credentials from ~/.docker/config.json (created by docker/login-action)
       - name: Build and push multi-platform images
         run: |
-          # Build all images (AMD64 + ARM64) and the multi-platform index
-          bazel build //oci:server_multiplatform //oci:worker_multiplatform
-          
-          # Push server multi-platform image (includes both AMD64 and ARM64)
-          bazel run //oci:server_push -- \
-            --tag ${{ steps.version.outputs.version }} \
-            --tag latest
-          
-          # Push worker multi-platform image (includes both AMD64 and ARM64)
-          bazel run //oci:worker_push -- \
-            --tag ${{ steps.version.outputs.version }} \
-            --tag latest
+          bazel build \
+            //oci:server.image.multiplatform \
+            //oci:worker.image.multiplatform \
+            //oci:cache.image.multiplatform \
+            //oci:bes.image.multiplatform
+
+          for target in server worker cache bes; do
+            bazel run "//oci:${target}.image.push" -- \
+              --tag "${{ steps.version.outputs.version }}" \
+              --tag latest
+          done
 
   create-release:
     name: Create Release
@@ -85,20 +82,18 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
           body: |
-            ## Docker Images
-            
-            Multi-platform images (AMD64, ARM64) are available on Docker Hub:
-            
             ```bash
-            # Server
             docker pull xangcastle/ferris-server:${{ github.ref_name }}
             docker pull xangcastle/ferris-server:latest
-            
-            # Worker
+
             docker pull xangcastle/ferris-worker:${{ github.ref_name }}
             docker pull xangcastle/ferris-worker:latest
+
+            docker pull xangcastle/ferris-cache:${{ github.ref_name }}
+            docker pull xangcastle/ferris-cache:latest
+
+            docker pull xangcastle/ferris-bes:${{ github.ref_name }}
+            docker pull xangcastle/ferris-bes:latest
             ```
-            
-            ## Platforms
             - `linux/amd64`
             - `linux/arm64`
