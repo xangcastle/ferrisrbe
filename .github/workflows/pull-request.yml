@@ -262,7 +262,7 @@ jobs:
 
     services:
       rbe-cache:
-        image: xangcastle/cache:latest
+        image: xangcastle/ferris-cache:latest
         ports:
           - 9094:9094
           - 8080:8080
