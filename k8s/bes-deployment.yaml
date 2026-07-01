@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rbe-bes
+  namespace: rbe
+  labels:
+    app: rbe-bes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rbe-bes
+  template:
+    metadata:
+      labels:
+        app: rbe-bes
+    spec:
+      containers:
+        - name: bes
+          image: xangcastle/ferris-bes:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9095
+              name: grpc
+            - containerPort: 9096
+              name: ui
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: RBE_BES_PORT
+              value: "9095"
+            - name: RBE_BES_UI_PORT
+              value: "9096"
+            - name: RBE_BES_BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: RBE_BES_DATA_DIR
+              value: "/data/bes"
+            - name: RBE_BES_STATIC_DIR
+              value: "/app/ui/dist"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: data
+              mountPath: /data/bes
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-bes
+  namespace: rbe
+  labels:
+    app: rbe-bes
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9095
+      targetPort: grpc
+      name: grpc
+    - port: 9096
+      targetPort: ui
+      name: ui
+  selector:
+    app: rbe-bes
+---
+# External access via NodePort for local development
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-bes-external
+  namespace: rbe
+  labels:
+    app: rbe-bes
+spec:
+  type: NodePort
+  ports:
+    - port: 9096
+      targetPort: ui
+      nodePort: 30096
+      name: ui
+  selector:
+    app: rbe-bes

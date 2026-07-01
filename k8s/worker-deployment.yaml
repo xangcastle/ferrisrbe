@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: ferrisrbe/worker:latest
+          image: xangcastle/ferris-worker:latest
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

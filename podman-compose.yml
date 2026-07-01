@@ -3,9 +3,10 @@ version: '3.8'
 # Podman Compose stack for local FerrisRBE development.
 # Images must be built and loaded with Bazel first:
 #
-#   bazel run //oci:server.arm64.load
-#   bazel run //oci:worker.arm64.load
-#   bazel run //oci:cache.arm64.load
+#   bazel run //oci:server.amd64.image.load
+#   bazel run //oci:worker.amd64.image.load
+#   bazel run //oci:cache.amd64.image.load
+#   bazel run //oci:bes.amd64.image.load
 #
 # Then start the stack:
 #   podman-compose -f podman-compose.yml up -d

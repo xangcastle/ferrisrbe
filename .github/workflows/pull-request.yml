@@ -3,8 +3,18 @@ name: CI
 on:
   pull_request:
     branches: [main, master]
-  push:
-    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'proto/**'
+      - 'oci/**'
+      - 'charts/**'
+      - 'k8s/**'
+      - 'benchmark/**'
+      - 'examples/**'
+      - '.github/workflows/pull-request.yml'
   workflow_dispatch:
     inputs:
       benchmark_all:
@@ -34,6 +44,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -52,11 +63,19 @@ jobs:
         run: |
           bazel build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect \
             --output_groups=+clippy_checks //:server //:worker //:cache //:bes 2>&1 || true
-        continue-on-error: true
 
-  build-binaries:
-    name: Build Binaries
+  ci:
+    name: Build, Test, Images, Integration and Benchmark
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    env:
+      CAS_ENDPOINT: localhost:9094
+      BENCHMARK_SERVICES: 1
+
     steps:
       - uses: actions/checkout@v4
 
@@ -74,72 +93,17 @@ jobs:
       - name: Build binaries
         run: bazel build //:all
 
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    needs: build-binaries
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Bazel
-        uses: bazelbuild/setup-bazelisk@v3
-
-      - name: Mount Bazel cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
       - name: Run tests
         run: bazel test //...
 
-  build-images:
-    name: Build Images
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Bazel
-        uses: bazelbuild/setup-bazelisk@v3
-
-      - name: Mount Bazel cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
       - name: Build and load images
         run: |
-          mkdir -p /tmp/ferrisrbe-images
           for image in server worker cache; do
             echo "=== Building ${image} ==="
             bazel run "//oci:${image}.amd64.image.load"
-            docker save "ferrisrbe/${image}:latest" | gzip > "/tmp/ferrisrbe-images/ferrisrbe-${image}-amd64.tar.gz"
           done
           echo "=== Images built ==="
           docker images | grep ferrisrbe || true
-
-      - name: Upload image artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ferrisrbe-images
-          path: /tmp/ferrisrbe-images/*.tar.gz
-          retention-days: 1
-
-  integration:
-    name: Integration Test
-    runs-on: ubuntu-latest
-    needs: build-images
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Bazel
-        uses: bazelbuild/setup-bazelisk@v3
 
       - name: Install Kind
         uses: helm/kind-action@v1
@@ -147,31 +111,7 @@ jobs:
           version: v0.22.0
           cluster_name: ferrisrbe-test
 
-      - name: Mount Bazel cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-${{ hashFiles('**/Cargo.lock', '**/MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
-      - name: Download image artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ferrisrbe-images
-          path: /tmp/ferrisrbe-images/
-
-      - name: Load images into Docker
-        run: |
-          for image in server worker cache; do
-            gunzip -c "/tmp/ferrisrbe-images/ferrisrbe-${image}-amd64.tar.gz" | docker load
-          done
-          echo "=== Docker images ==="
-          docker images | grep ferrisrbe || true
-          echo "=== Image architecture ==="
-          docker inspect ferrisrbe/server:latest | grep Architecture || true
-
-      - name: Load images to Kind
+      - name: Load images into Kind
         run: |
           kind load docker-image ferrisrbe/server:latest --name ferrisrbe-test
           kind load docker-image ferrisrbe/worker:latest --name ferrisrbe-test
@@ -188,6 +128,7 @@ jobs:
             --set worker.image.pullPolicy=Never \
             --set cache.image.repository=ferrisrbe/cache \
             --set cache.image.pullPolicy=Never \
+            --set bes.enabled=false \
             --set server.livenessProbe.enabled=false \
             --set server.readinessProbe.enabled=false \
             --set worker.livenessProbe.enabled=false \
@@ -245,43 +186,18 @@ jobs:
           cd examples/bazel-7.4
           bazel build //:cacheable_step --config=remote-cache
 
-      - name: Cleanup
+      - name: Cleanup Kind
         if: always()
         run: |
           kind delete cluster --name ferrisrbe-test || true
 
-  benchmark-pr:
-    name: Benchmark PR
-    runs-on: ubuntu-latest
-    needs: integration
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-
-    env:
-      CAS_ENDPOINT: localhost:9094
-      BENCHMARK_SERVICES: 1
-
-    steps:
-      - name: Checkout PR
-        uses: actions/checkout@v4
-
-      - name: Download image artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ferrisrbe-images
-          path: /tmp/ferrisrbe-images/
-
-      - name: Load Docker images
+      - name: Install benchmark dependencies
         run: |
-          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-server-amd64.tar.gz | docker load
-          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-worker-amd64.tar.gz | docker load
-          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-cache-amd64.tar.gz | docker load
-          docker images | grep ferrisrbe || true
+          sudo apt-get update
+          sudo apt-get install -y python3-pip bc netcat-openbsd
+          pip3 install grpcio grpcio-tools
 
-      - name: Start cache service
+      - name: Start benchmark cache service
         run: |
           docker run -d --name rbe-cache \
             -p 9094:9094 \
@@ -294,7 +210,7 @@ jobs:
             -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
             ferrisrbe/cache:latest
 
-      - name: Wait for cache service
+      - name: Wait for benchmark cache service
         run: |
           for i in $(seq 1 30); do
             if nc -zv localhost 9094 2>/dev/null; then
@@ -307,12 +223,6 @@ jobs:
           echo "Cache service did not become ready"
           docker logs rbe-cache
           exit 1
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip bc netcat-openbsd
-          pip3 install grpcio grpcio-tools
 
       - name: Run full benchmark suite
         id: benchmark
@@ -341,7 +251,7 @@ jobs:
           path: benchmark/results/
           retention-days: 30
 
-      - name: Write step summary
+      - name: Write benchmark summary
         if: always()
         run: |
           if [ -f benchmark/results/benchmark_summary.md ]; then
@@ -350,9 +260,9 @@ jobs:
             echo "❌ Benchmark failed to complete." >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Post unified PR comment
+      - name: Post benchmark PR comment
         uses: actions/github-script@v7
-        if: always()
+        if: always() && github.event_name == 'pull_request'
         continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -448,88 +358,3 @@ jobs:
               });
               console.log('Created new benchmark comment');
             }
-
-  benchmark-push:
-    name: Benchmark Full Suite (Container)
-    runs-on: ubuntu-latest
-    needs: integration
-    if: github.event_name == 'push' || github.event.inputs.benchmark_all == 'true'
-    permissions:
-      contents: read
-
-    env:
-      CAS_ENDPOINT: localhost:9094
-      BENCHMARK_SERVICES: 1
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download image artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ferrisrbe-images
-          path: /tmp/ferrisrbe-images/
-
-      - name: Load Docker images
-        run: |
-          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-server-amd64.tar.gz | docker load
-          gunzip -c /tmp/ferrisrbe-images/ferrisrbe-cache-amd64.tar.gz | docker load
-          docker images | grep ferrisrbe || true
-
-      - name: Start cache service
-        run: |
-          docker run -d --name rbe-cache \
-            -p 9094:9094 \
-            -p 8080:8080 \
-            -e RUST_LOG=info \
-            -e RBE_CACHE_PORT=9094 \
-            -e RBE_CACHE_HTTP_PORT=8080 \
-            -e RBE_CACHE_DIR=/data \
-            -e RBE_CACHE_MAX_SIZE_GB=1 \
-            -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
-            ferrisrbe/cache:latest
-
-      - name: Wait for cache service
-        run: |
-          for i in $(seq 1 30); do
-            if nc -zv localhost 9094 2>/dev/null; then
-              echo "Cache service is ready"
-              exit 0
-            fi
-            echo "Waiting for cache service... ($i/30)"
-            sleep 1
-          done
-          echo "Cache service did not become ready"
-          docker logs rbe-cache
-          exit 1
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip bc netcat-openbsd
-          pip3 install grpcio grpcio-tools
-
-      - name: Run full benchmark suite (container)
-        run: |
-          cd benchmark
-          ./scripts/benchmark-ci.sh full
-
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          tool: 'customSmallerIsBetter'
-          output-file-path: benchmark/results/benchmark_data.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          alert-threshold: '150%'  # Fail if 50% slower
-          comment-on-alert: true
-          fail-on-alert: true
-
-      - name: Upload detailed results
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results-full
-          path: benchmark/results/
-          retention-days: 90

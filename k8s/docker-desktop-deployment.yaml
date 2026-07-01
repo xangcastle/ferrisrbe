@@ -20,13 +20,15 @@ spec:
     spec:
       containers:
         - name: server
-          image: rbe-server:latest
-          imagePullPolicy: Never
+          image: xangcastle/ferris-server:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9092
           env:
             - name: RUST_LOG
               value: "info"
+            - name: CAS_ENDPOINT
+              value: "rbe-cache:9094"
           resources:
             requests:
               memory: "256Mi"
@@ -66,13 +68,15 @@ spec:
     spec:
       containers:
         - name: worker
-          image: rbe-worker:latest
-          imagePullPolicy: Never
+          image: xangcastle/ferris-worker:latest
+          imagePullPolicy: IfNotPresent
           env:
             - name: RUST_LOG
               value: "info"
             - name: SERVER_ENDPOINT
               value: "http://rbe-server:9092"
+            - name: CAS_ENDPOINT
+              value: "http://rbe-cache:9094"
           resources:
             requests:
               memory: "256Mi"
@@ -97,11 +101,11 @@ spec:
       labels:
         app: rbe-cache
     spec:
-      enableServiceLinks: false  # Disable K8s service env injection
+      enableServiceLinks: false
       containers:
         - name: rbe-cache
-          image: ferrisrbe/cache:latest
-          imagePullPolicy: Never
+          image: xangcastle/ferris-cache:latest
+          imagePullPolicy: IfNotPresent
           env:
             - name: RUST_LOG
               value: "info"
@@ -161,4 +165,74 @@ spec:
       name: http
   selector:
     app: rbe-cache
-
+---
+# rbe-bes: Build Event Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rbe-bes
+  namespace: rbe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rbe-bes
+  template:
+    metadata:
+      labels:
+        app: rbe-bes
+    spec:
+      containers:
+        - name: rbe-bes
+          image: xangcastle/ferris-bes:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: RBE_BES_PORT
+              value: "9095"
+            - name: RBE_BES_UI_PORT
+              value: "9096"
+            - name: RBE_BES_BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: RBE_BES_DATA_DIR
+              value: "/data/bes"
+            - name: RBE_BES_STATIC_DIR
+              value: "/app/ui/dist"
+          ports:
+            - containerPort: 9095
+              name: grpc
+            - containerPort: 9096
+              name: ui
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: data
+              mountPath: /data/bes
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbe-bes
+  namespace: rbe
+spec:
+  type: NodePort
+  ports:
+    - port: 9096
+      targetPort: ui
+      nodePort: 30096
+      name: ui
+  selector:
+    app: rbe-bes
