@@ -13,7 +13,6 @@ Usage:
 """
 
 import argparse
-import atexit
 import json
 import os
 import shutil
@@ -98,12 +97,12 @@ def run(cmd: List[str], check: bool = True, cwd: Optional[Path] = None, **kwargs
     )
 
 
-def docker_available() -> bool:
-    return shutil.which("docker") is not None
+def container_runtime_available() -> bool:
+    return shutil.which("podman") is not None
 
 
 def container_exists(name: str) -> bool:
-    result = run(["docker", "ps", "-aq", "--filter", f"name={name}"], check=False)
+    result = run(["podman", "ps", "-aq", "--filter", f"name={name}"], check=False)
     return bool(result.stdout.strip())
 
 
@@ -111,13 +110,13 @@ def stop_container(name: Optional[str]) -> None:
     if not name:
         return
     if container_exists(name):
-        run(["docker", "rm", "-f", name], check=False)
+        run(["podman", "rm", "-f", name], check=False)
 
 
 def list_benchmark_containers() -> List[str]:
     """Return names of all containers created by this orchestrator."""
     result = run(
-        ["docker", "ps", "-aq", "--format", "{{.Names}}"],
+        ["podman", "ps", "-aq", "--format", "{{.Names}}"],
         check=False,
     )
     if result.returncode != 0 or not result.stdout.strip():
@@ -137,25 +136,25 @@ def cleanup_all_benchmark_containers() -> None:
         return
     log_info(f"Removing {len(names)} leftover benchmark container(s): {', '.join(names)}")
     for name in names:
-        run(["docker", "rm", "-f", name], check=False)
+        run(["podman", "rm", "-f", name], check=False)
     # Give the host/port mapper a moment to release bindings.
     time.sleep(1)
 
 
 def ensure_network() -> None:
-    """Create the Docker bridge network used by benchmark containers."""
-    result = run(["docker", "network", "inspect", NETWORK_NAME], check=False)
+    """Create the bridge network used by benchmark containers."""
+    result = run(["podman", "network", "inspect", NETWORK_NAME], check=False)
     if result.returncode != 0:
-        log_info(f"Creating Docker network: {NETWORK_NAME}")
-        run(["docker", "network", "create", NETWORK_NAME], check=False)
+        log_info(f"Creating container network: {NETWORK_NAME}")
+        run(["podman", "network", "create", NETWORK_NAME], check=False)
 
 
 def remove_network() -> None:
-    """Remove the Docker bridge network if it exists."""
-    result = run(["docker", "network", "inspect", NETWORK_NAME], check=False)
+    """Remove the bridge network if it exists."""
+    result = run(["podman", "network", "inspect", NETWORK_NAME], check=False)
     if result.returncode == 0:
-        log_info(f"Removing Docker network: {NETWORK_NAME}")
-        run(["docker", "network", "rm", NETWORK_NAME], check=False)
+        log_info(f"Removing container network: {NETWORK_NAME}")
+        run(["podman", "network", "rm", NETWORK_NAME], check=False)
 
 
 def wait_for_port(port: int, timeout: int = 60) -> bool:
@@ -187,7 +186,7 @@ def wait_for_port_free(port: int, timeout: int = 30) -> bool:
 def get_container_memory_mb(name: str) -> float:
     """Return the latest memory usage in MB for a container."""
     result = run(
-        ["docker", "stats", name, "--no-stream", "--format", "{{.MemUsage}}"],
+        ["podman", "stats", name, "--no-stream", "--format", "{{.MemUsage}}"],
         check=False,
     )
     if result.returncode != 0 or not result.stdout.strip():
@@ -197,11 +196,17 @@ def get_container_memory_mb(name: str) -> float:
     value = float("".join(c for c in raw if c.isdigit() or c == "."))
     if "GiB" in raw:
         value *= 1024
+    elif "kB" in raw:
+        value /= 1024
+    elif "MB" in raw:
+        pass  # Already in megabytes.
+    elif "MiB" in raw:
+        pass  # Treat as megabytes for reporting.
     return value
 
 
 def get_image_info(image: str) -> Dict[str, str]:
-    result = run(["docker", "images", "--format", "{{.ID}}|{{.Size}}|{{.CreatedAt}}", image], check=False)
+    result = run(["podman", "images", "--format", "{{.ID}}|{{.Size}}|{{.CreatedAt}}", image], check=False)
     if result.returncode != 0 or not result.stdout.strip():
         return {"id": "N/A", "size": "N/A", "created": "N/A"}
     parts = result.stdout.strip().split("|")
@@ -259,7 +264,7 @@ class BenchmarkEnvironment:
 
         ensure_network()
         run([
-            "docker", "run", "-d",
+            "podman", "run", "-d",
             "--name", self.cache_name,
             "--network", NETWORK_NAME,
             "-p", "9094:9094",
@@ -284,7 +289,7 @@ class BenchmarkEnvironment:
         log_info(f"Starting server container from {self.server_image}")
         ensure_network()
         run([
-            "docker", "run", "-d",
+            "podman", "run", "-d",
             "--name", self.server_name,
             "--network", NETWORK_NAME,
             "-p", "9092:9092",
@@ -299,7 +304,7 @@ class BenchmarkEnvironment:
         ])
 
         if not wait_for_port(9092, timeout=60):
-            logs = run(["docker", "logs", self.server_name], check=False).stdout
+            logs = run(["podman", "logs", self.server_name], check=False).stdout
             log_error("Server failed to start")
             print(logs[-2000:] if logs else "(no logs)", file=sys.stderr)
             raise RuntimeError("Server failed to start")
@@ -310,7 +315,7 @@ class BenchmarkEnvironment:
         worker_id = f"benchmark-worker-{self.timestamp}"
         ensure_network()
         run([
-            "docker", "run", "-d",
+            "podman", "run", "-d",
             "--name", self.worker_name,
             "--network", NETWORK_NAME,
             "-e", f"WORKER_ID={worker_id}",
@@ -494,7 +499,7 @@ def measure_cold_start(image: str, current_server_name: str, cache_name: str = "
     cold_name = f"{CONTAINER_PREFIX}-coldstart-{int(time.time())}"
     start = time.time_ns()
     run([
-        "docker", "run", "-d",
+        "podman", "run", "-d",
         "--name", cold_name,
         "--network", NETWORK_NAME,
         "-p", "9092:9092",
@@ -634,8 +639,8 @@ def generate_report() -> None:
 
 def compare_images(pr_image: str) -> None:
     """Compare the PR image against the official release image."""
-    if not docker_available():
-        log_error("Docker is required for comparison")
+    if not container_runtime_available():
+        log_error("Podman is required for comparison")
         sys.exit(1)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -647,7 +652,7 @@ def compare_images(pr_image: str) -> None:
     def benchmark_image(image: str, name: str, container_name: str) -> Tuple[Optional[float], Optional[Dict]]:
         log_info(f"Benchmarking {name}: {image}")
         run([
-            "docker", "run", "-d",
+            "podman", "run", "-d",
             "--name", container_name,
             "--network", "host",
             "-p", "9092:9092",
@@ -678,7 +683,7 @@ def compare_images(pr_image: str) -> None:
         return mem, info
 
     try:
-        run(["docker", "pull", OFFICIAL_SERVER_IMAGE], check=False)
+        run(["podman", "pull", OFFICIAL_SERVER_IMAGE], check=False)
         official_mem, official_info = benchmark_image(OFFICIAL_SERVER_IMAGE, "official", official_container)
         pr_mem, pr_info = benchmark_image(pr_image, "pr", pr_container)
 
@@ -723,19 +728,19 @@ def compare_images(pr_image: str) -> None:
 
 def ensure_images(server_image: str, worker_image: str, cache_image: str) -> None:
     """Build or pull images if they are not present locally."""
-    if not docker_available():
-        log_error("Docker is required for container-native benchmarks")
+    if not container_runtime_available():
+        log_error("Podman is required for container-native benchmarks")
         sys.exit(1)
 
     for image, label in [(server_image, "server"), (worker_image, "worker"), (cache_image, "cache")]:
-        result = run(["docker", "image", "inspect", image], check=False)
+        result = run(["podman", "image", "inspect", image], check=False)
         if result.returncode == 0:
             log_info(f"Image present: {image}")
             continue
 
         if image.startswith("xangcastle/"):
             log_info(f"Pulling {label} image: {image}")
-            run(["docker", "pull", image], check=False)
+            run(["podman", "pull", image], check=False)
         else:
             log_info(f"Building {label} image via Bazel: {image}")
             arch = os.uname().machine
@@ -754,8 +759,6 @@ def cmd_light(args: argparse.Namespace) -> int:
         worker_image=args.worker_image,
         cache_image=args.cache_image,
     )
-    atexit.register(env.cleanup)
-
     cleanup_all_benchmark_containers()
     try:
         env.ensure_cache()
@@ -777,7 +780,6 @@ def cmd_full(args: argparse.Namespace) -> int:
         worker_image=args.worker_image,
         cache_image=args.cache_image,
     )
-    atexit.register(env.cleanup)
 
     cleanup_all_benchmark_containers()
     try:

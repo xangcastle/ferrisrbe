@@ -254,7 +254,7 @@ bazel run //benchmark/scripts:check_regression -- \
 
 - Check if port 9092 is available
 - Verify the image is built: `bazel run //oci:server_load_amd64`
-- Check server logs: `docker logs ferrisrbe-benchmark-server-<timestamp>`
+- Check server logs: `podman logs ferrisrbe-benchmark-server-<timestamp>`
 
 ### "Benchmark timeout"
 

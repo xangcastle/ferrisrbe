@@ -119,7 +119,7 @@ def get_container_memory(container_name: str) -> float:
     import subprocess
     try:
         result = subprocess.run(
-            ['docker', 'stats', container_name, '--no-stream', '--format', '{{.MemUsage}}'],
+            ['podman', 'stats', container_name, '--no-stream', '--format', '{{.MemUsage}}'],
             capture_output=True, text=True, timeout=5
         )
         mem_str = result.stdout.strip().split('/')[0].strip()

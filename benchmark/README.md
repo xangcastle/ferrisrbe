@@ -34,8 +34,8 @@ This suite tests seven critical dimensions of RBE performance:
 ### Prerequisites
 
 ```bash
-# Docker (required)
-docker --version
+# Podman (required)
+podman --version
 
 # Python dependencies
 python3 -m pip install grpcio grpcio-tools
@@ -57,17 +57,17 @@ bazel run //benchmark:run -- light
 bazel run //benchmark:run -- full
 ```
 
-### Using Docker Compose (Alternative)
+### Using Podman Compose (Alternative)
 
 ```bash
 # Start services
-docker-compose -f docker-compose.benchmark.yml up -d
+podman-compose -f docker-compose.benchmark.yml up -d
 
 # Run benchmarks against running container
 bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
 
 # Cleanup
-docker-compose -f docker-compose.benchmark.yml down -v
+podman-compose -f docker-compose.benchmark.yml down -v
 ```
 
 ### Generate Report from Results
@@ -270,20 +270,20 @@ bazel run //benchmark:run -- compare --image ferrisrbe/server:latest
 Each solution has a corresponding `docker-compose.*.yml` file:
 
 ```bash
-# Test Buildfarm (upstream Docker image)
-docker-compose -f docker-compose.buildfarm.yml up -d
+# Test Buildfarm (upstream container image)
+podman-compose -f docker-compose.buildfarm.yml up -d
 bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
-docker-compose -f docker-compose.buildfarm.yml down -v
+podman-compose -f docker-compose.buildfarm.yml down -v
 
-# Test Buildbarn (upstream Docker images)
-docker-compose -f docker-compose.buildbarn.yml up -d
+# Test Buildbarn (upstream container images)
+podman-compose -f docker-compose.buildbarn.yml up -d
 bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
-docker-compose -f docker-compose.buildbarn.yml down -v
+podman-compose -f docker-compose.buildbarn.yml down -v
 
-# Test NativeLink (upstream Docker image)
-docker-compose -f docker-compose.nativelink.yml up -d
+# Test NativeLink (upstream container image)
+podman-compose -f docker-compose.nativelink.yml up -d
 bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
-docker-compose -f docker-compose.nativelink.yml down -v
+podman-compose -f docker-compose.nativelink.yml down -v
 ```
 
 ## 📝 Implementation Notes
