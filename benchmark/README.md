@@ -20,22 +20,22 @@ This suite tests seven critical dimensions of RBE performance:
 
 | Dimension | Test Script | FerrisRBE Advantage |
 |-----------|-------------|---------------------|
-| **Memory Footprint** | `benchmark-ci.sh` | 18-300x less memory (6.7MB vs GBs) |
+| **Memory Footprint** | `//benchmark:run` | 18-300x less memory (6.7MB vs GBs) |
 | **Execution Throughput** | `execution-load-test.py` | Zero-GC = consistent p99 latency |
 | **Action Cache Performance** | `action-cache-test.py` | DashMap (lock-free) vs Redis/DB |
 | **Scheduler Fairness** | `noisy-neighbor-test.py` | Multi-level vs FIFO (no HoL blocking) |
 | **O(1) Streaming** | `o1-streaming-test.py` | Constant memory regardless of blob size |
 | **Connection Churn** | `connection-churn-test.py` | Immediate resource cleanup (Tokio) |
 | **Cache Stampede** | `cache-stampede-test.py` | Request coalescing prevents overload |
-| **Cold Start** | `benchmark-ci.sh` | <100ms vs 5-30s JVM warmup |
+| **Cold Start** | `//benchmark:run` | <100ms vs 5-30s JVM warmup |
 
 ## 🚀 Quick Start (Container Mode)
 
 ### Prerequisites
 
 ```bash
-# Docker (required)
-docker --version
+# Podman (required)
+podman --version
 
 # Python dependencies
 python3 -m pip install grpcio grpcio-tools
@@ -51,24 +51,23 @@ bazel --version
 bazel run //oci:server_load_amd64
 
 # 2. Run container-native benchmarks
-cd benchmark
-./scripts/benchmark-ci.sh light
+bazel run //benchmark:run -- light
 
 # Or run full suite
-./scripts/benchmark-ci.sh full
+bazel run //benchmark:run -- full
 ```
 
-### Using Docker Compose (Alternative)
+### Using Podman Compose (Alternative)
 
 ```bash
 # Start services
-docker-compose -f docker-compose.benchmark.yml up -d
+podman-compose -f docker-compose.benchmark.yml up -d
 
 # Run benchmarks against running container
-./scripts/execution-load-test.py --server localhost:9092
+bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
 
 # Cleanup
-docker-compose -f docker-compose.benchmark.yml down -v
+podman-compose -f docker-compose.benchmark.yml down -v
 ```
 
 ### Generate Report from Results
@@ -77,10 +76,7 @@ After running benchmarks, generate a comprehensive markdown report:
 
 ```bash
 # Generate report from all JSON results
-./scripts/generate-report.sh
-
-# Or specify custom paths
-./scripts/generate-report.sh ../results ../results/my-report.md
+bazel run //benchmark:run -- report
 ```
 
 This creates:
@@ -99,7 +95,7 @@ Instead of compiling `main` branch (slow), compare your PR against the **officia
 
 ```bash
 # Compare PR image against xangcastle/ferris-server:latest
-./scripts/compare-branches.sh ferrisrbe/server:latest
+bazel run //benchmark:run -- compare --image ferrisrbe/server:latest
 ```
 
 This is **much faster** (~30s vs ~5-10min) and tests the **actual artifact users run**.
@@ -125,24 +121,29 @@ This is **much faster** (~30s vs ~5-10min) and tests the **actual artifact users
 ```
 benchmark/
 ├── README.md                          # This file
+├── BUILD.bazel                        # Bazel entry points
+├── requirements.txt                   # Python dependencies for rules_python
 ├── docker-compose.benchmark.yml       # Optimized benchmark setup
 ├── docker-compose.ferrisrbe.yml       # Full stack (dev)
 ├── config/                            # Configuration files
-├── scripts/
-│   ├── benchmark-ci.sh               # ⭐ Main CI script (container-native)
-│   ├── compare-branches.sh           # ⭐ Compare PR vs official release
-│   ├── generate-report.sh            # ⭐ Generate markdown report from results
-│   ├── check-regression.py           # Regression detection
-│   ├── execution-load-test.py        # Execution API throughput
-│   ├── action-cache-test.py          # AC performance (DashMap)
-│   ├── noisy-neighbor-test.py        # Scheduler fairness
-│   ├── o1-streaming-test.py          # O(1) streaming (large files)
-│   ├── connection-churn-test.py      # Abrupt disconnections
-│   ├── cache-stampede-test.py        # Thundering herd test
+├── proto/                             # Bazel-generated Python proto stubs
+│   ├── BUILD.bazel
+│   └── generate_protos.py
+├── scripts/                           # Python benchmark scripts
+│   ├── BUILD.bazel                    # Bazel targets for each script
+│   ├── benchmark_lib.py               # Shared benchmark helpers
+│   ├── check-regression.py            # Regression detection
+│   ├── execution-load-test.py         # Execution API throughput
+│   ├── action-cache-test.py           # AC performance (DashMap)
+│   ├── noisy-neighbor-test.py         # Scheduler fairness
+│   ├── o1-streaming-test.py           # O(1) streaming (large files)
+│   ├── connection-churn-test.py       # Abrupt disconnections
+│   ├── cache-stampede-test.py         # Thundering herd test
 │   └── ...
+├── orchestrator.py                    # Main Bazel-runnable orchestrator
 └── results/                           # Generated results
-    ├── BENCHMARK_REPORT_*.md         # Auto-generated reports
-    └── LATEST_REPORT.md              # Symlink to latest report
+    ├── BENCHMARK_REPORT_*.md          # Auto-generated reports
+    └── LATEST_REPORT.md               # Symlink to latest report
 ```
 
 ## 🐕 Dogfooding with Bazel
@@ -156,8 +157,8 @@ bazel run //oci:server_load_amd64
 # Build ARM64 image (for Mac M1/M2)
 bazel run //oci:server_load
 
-# The benchmark scripts use this image automatically
-./scripts/benchmark-ci.sh light
+# The benchmark orchestrator uses this image automatically
+bazel run //benchmark:run -- light
 ```
 
 ## 🔬 Benchmark Details
@@ -167,7 +168,7 @@ bazel run //oci:server_load
 Measures idle memory consumption inside the container with resource limits.
 
 ```bash
-./scripts/benchmark-ci.sh light  # Includes memory test
+bazel run //benchmark:run -- light  # Includes memory test
 ```
 
 **Why container mode matters:** Tests actual memory usage with Docker limits, not host OS memory.
@@ -177,7 +178,7 @@ Measures idle memory consumption inside the container with resource limits.
 Measures container startup + server ready time.
 
 ```bash
-./scripts/benchmark-ci.sh light  # Includes cold start test
+bazel run //benchmark:run -- light  # Includes cold start test
 ```
 
 **Container cold start includes:**
@@ -190,18 +191,18 @@ Measures container startup + server ready time.
 Tests concurrent action execution via the Execution API against the container.
 
 ```bash
-./scripts/execution-load-test.py \
+bazel run //benchmark/scripts:execution_load_test -- \
     --server localhost:9092 \
     --actions 1000 \
     --concurrent 50
 ```
 
-### 4. O(1) Streaming with Container Monitoring
+### 4. O(1) Streaming
 
-Tests memory usage when streaming large files, monitoring actual container stats:
+Tests memory usage when streaming large files:
 
 ```bash
-./scripts/o1-streaming-test.py \
+bazel run //benchmark/scripts:o1_streaming_test -- \
     --server localhost:9092 \
     --large-sizes 5 10 \
     --small-count 1000 \
@@ -254,14 +255,14 @@ The repository includes a GitHub Actions workflow (`.github/workflows/benchmark.
 bazel run //oci:server_load_amd64
 
 # Run benchmarks
-./scripts/benchmark-ci.sh light
+bazel run //benchmark:run -- light
 ```
 
 ### Against Official Release
 
 ```bash
 # Compare local build against Docker Hub
-./scripts/compare-branches.sh ferrisrbe/server:latest
+bazel run //benchmark:run -- compare --image ferrisrbe/server:latest
 ```
 
 ### Other Solutions
@@ -269,20 +270,20 @@ bazel run //oci:server_load_amd64
 Each solution has a corresponding `docker-compose.*.yml` file:
 
 ```bash
-# Test Buildfarm (upstream Docker image)
-docker-compose -f docker-compose.buildfarm.yml up -d
-./scripts/execution-load-test.py --server localhost:9092
-docker-compose -f docker-compose.buildfarm.yml down -v
+# Test Buildfarm (upstream container image)
+podman-compose -f docker-compose.buildfarm.yml up -d
+bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
+podman-compose -f docker-compose.buildfarm.yml down -v
 
-# Test Buildbarn (upstream Docker images)
-docker-compose -f docker-compose.buildbarn.yml up -d
-./scripts/execution-load-test.py --server localhost:9092
-docker-compose -f docker-compose.buildbarn.yml down -v
+# Test Buildbarn (upstream container images)
+podman-compose -f docker-compose.buildbarn.yml up -d
+bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
+podman-compose -f docker-compose.buildbarn.yml down -v
 
-# Test NativeLink (upstream Docker image)
-docker-compose -f docker-compose.nativelink.yml up -d
-./scripts/execution-load-test.py --server localhost:9092
-docker-compose -f docker-compose.nativelink.yml down -v
+# Test NativeLink (upstream container image)
+podman-compose -f docker-compose.nativelink.yml up -d
+bazel run //benchmark/scripts:execution_load_test -- --server localhost:9092
+podman-compose -f docker-compose.nativelink.yml down -v
 ```
 
 ## 📝 Implementation Notes

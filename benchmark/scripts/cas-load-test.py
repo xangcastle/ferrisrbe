@@ -12,7 +12,6 @@ import hashlib
 import os
 import random
 import string
-import sys
 import time
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,16 +20,8 @@ from typing import List, Optional
 
 import grpc
 
-# Add generated proto path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'proto_gen'))
-
-try:
-    from build.bazel.remote.execution.v2 import remote_execution_pb2
-    from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
-except ImportError:
-    print("Warning: Protocol buffer modules not found. Using mock implementations.")
-    print("Install with: pip install grpcio grpcio-tools")
-    sys.exit(1)
+from build.bazel.remote.execution.v2 import remote_execution_pb2
+from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
 
 
 @dataclass

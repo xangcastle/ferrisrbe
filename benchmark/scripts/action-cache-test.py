@@ -10,8 +10,6 @@ vs Redis-based (Buildfarm) or database-backed (Buildbarn) solutions.
 import argparse
 import asyncio
 import hashlib
-import os
-import sys
 import time
 import statistics
 from dataclasses import dataclass, field
@@ -20,14 +18,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import grpc
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'proto_gen'))
-
-try:
-    from build.bazel.remote.execution.v2 import remote_execution_pb2
-    from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
-except ImportError:
-    print("Warning: Protocol buffer modules not found.")
-    sys.exit(1)
+from build.bazel.remote.execution.v2 import remote_execution_pb2
+from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
 
 
 @dataclass

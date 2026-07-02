@@ -81,39 +81,34 @@ variables:
 
 build:
   stage: build
-  image: rust:1.85
+  image: bazelbuild/bazelisk:latest
   script:
-    - apt-get update && apt-get install -y protobuf-compiler
-    - cargo build --release --bin rbe-server
+    - bazel build //:all
   artifacts:
     paths:
-      - target/release/rbe-server
+      - bazel-bin/
     expire_in: 1 hour
 
 benchmark:light:
   stage: benchmark
-  image: python:3.11
+  image: bazelbuild/bazelisk:latest
   dependencies:
     - build
   script:
-    - pip install grpcio grpcio-tools
-    - cd benchmark && ./scripts/benchmark-ci.sh light
+    - bazel run //benchmark:run -- light --cache-image ferrisrbe/cache:latest
   artifacts:
     paths:
       - benchmark/results/
-    reports:
-      junit: benchmark/results/junit.xml
   only:
     - merge_requests
 
 benchmark:full:
   stage: benchmark
-  image: python:3.11
+  image: bazelbuild/bazelisk:latest
   dependencies:
     - build
   script:
-    - pip install grpcio grpcio-tools
-    - cd benchmark && ./scripts/benchmark-ci.sh full
+    - bazel run //benchmark:run -- full --cache-image ferrisrbe/cache:latest
   artifacts:
     paths:
       - benchmark/results/
@@ -127,15 +122,14 @@ benchmark:full:
 Test the CI pipeline locally before pushing:
 
 ```bash
-# Build release binary
-cargo build --release --bin rbe-server
+# Build all binaries and images
+bazel build //:all
 
 # Run lightweight CI benchmark
-cd benchmark
-./scripts/benchmark-ci.sh light
+bazel run //benchmark:run -- light
 
 # Check results
-cat results/benchmark_summary.md
+cat benchmark/results/benchmark_summary.md
 ```
 
 ## Regression Thresholds
@@ -151,7 +145,7 @@ The CI system checks these thresholds:
 | `churn_cleanup_rate` | > 95% | Proper resource cleanup |
 | `streaming_delta_mb` | < 100 MB | O(1) streaming verified |
 
-To modify thresholds, edit `scripts/check-regression.py`:
+To modify thresholds, edit `benchmark/scripts/check-regression.py`:
 
 ```python
 THRESHOLDS = {
@@ -211,9 +205,8 @@ When comparing against main:
 2. **Identify the specific metric** that regressed
 3. **Reproduce locally**:
    ```bash
-   cd benchmark
-   ./scripts/benchmark.sh
-   ./scripts/check-regression.py results/benchmark_data.json
+   bazel run //benchmark:run -- light
+   bazel run //benchmark/scripts:check_regression -- benchmark/results/benchmark_data.json
    ```
 4. **Optimize** the code causing regression
 5. **Re-run CI** after fixes
@@ -231,27 +224,17 @@ When comparing against main:
 
 ### Custom Benchmark Duration
 
-For longer-running benchmarks:
+For longer-running benchmarks, run the full suite:
 
 ```yaml
 - name: Run extended benchmark
-  run: |
-    cd benchmark
-    ./scripts/benchmark-ci.sh full
-  env:
-    BENCHMARK_DURATION: 300  # 5 minutes per test
+  run: bazel run //benchmark:run -- full
 ```
 
-### Selective Benchmarks
-
-Run only specific benchmarks:
+### Compare Against Official Release
 
 ```bash
-# Only memory and cold start
-./scripts/benchmark-ci.sh light --tests memory,cold_start
-
-# Skip streaming tests (slow)
-./scripts/benchmark-ci.sh full --skip streaming
+bazel run //benchmark:run -- compare --image ferrisrbe/server:latest
 ```
 
 ### Baseline Comparison
@@ -259,10 +242,10 @@ Run only specific benchmarks:
 Compare against a specific baseline:
 
 ```bash
-python3 scripts/check-regression.py \
-    results/benchmark_data.json \
-    --baseline results/baseline.json \
-    --output report.md
+bazel run //benchmark/scripts:check_regression -- \
+    benchmark/results/benchmark_data.json \
+    --baseline benchmark/results/baseline.json \
+    --output benchmark/results/report.md
 ```
 
 ## Troubleshooting
@@ -270,13 +253,13 @@ python3 scripts/check-regression.py \
 ### "Server failed to start"
 
 - Check if port 9092 is available
-- Verify binary exists: `ls target/release/rbe-server`
-- Check server logs: `cat results/rbe-server.log`
+- Verify the image is built: `bazel run //oci:server_load_amd64`
+- Check server logs: `podman logs ferrisrbe-benchmark-server-<timestamp>`
 
 ### "Benchmark timeout"
 
 - Increase timeout in workflow: `timeout-minutes: 30`
-- Reduce load: edit `benchmark-ci.sh` to use fewer actions
+- Reduce load: edit `LIGHT_TESTS` / `FULL_TESTS` in `benchmark/orchestrator.py`
 
 ### "No baseline for comparison"
 

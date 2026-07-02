@@ -8,31 +8,19 @@ without GC pauses (Rust) vs JVM-based solutions.
 """
 
 import argparse
-import asyncio
-import hashlib
-import os
-import sys
-import time
 import statistics
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import grpc
 
-# Generated proto imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'proto_gen'))
+from build.bazel.remote.execution.v2 import remote_execution_pb2
+from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
+from google.longrunning import operations_pb2_grpc
 
-try:
-    from build.bazel.remote.execution.v2 import remote_execution_pb2
-    from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
-    from google.longrunning import operations_pb2
-    from google.longrunning import operations_pb2_grpc
-except ImportError:
-    print("Warning: Protocol buffer modules not found.")
-    print("Install with: pip install grpcio grpcio-tools")
-    print("Proto files need to be generated from the REAPI definitions.")
-    sys.exit(1)
+from benchmark.scripts import benchmark_lib
 
 
 @dataclass
@@ -100,50 +88,7 @@ class ExecutionSummary:
     
     @staticmethod
     def _percentile(data: List[float], percentile: float) -> float:
-        if not data:
-            return 0.0
-        sorted_data = sorted(data)
-        index = int(len(sorted_data) * percentile / 100)
-        return sorted_data[min(index, len(sorted_data) - 1)]
-
-
-def create_simple_action(command: List[str]) -> tuple:
-    """Create a simple action for testing"""
-    # Create command proto
-    command_proto = remote_execution_pb2.Command(
-        arguments=command,
-        output_paths=["output.txt"]
-    )
-    command_bytes = command_proto.SerializeToString()
-    command_digest = remote_execution_pb2.Digest(
-        hash=hashlib.sha256(command_bytes).hexdigest(),
-        size_bytes=len(command_bytes)
-    )
-
-    # REAPI requires input_root_digest even for actions with no inputs; it
-    # must reference a (possibly empty) Directory present in the CAS. Strict
-    # servers (e.g. NativeLink) reject actions without it.
-    input_root_proto = remote_execution_pb2.Directory()
-    input_root_bytes = input_root_proto.SerializeToString()
-    input_root_digest = remote_execution_pb2.Digest(
-        hash=hashlib.sha256(input_root_bytes).hexdigest(),
-        size_bytes=len(input_root_bytes)
-    )
-
-    # Create action proto
-    action_proto = remote_execution_pb2.Action(
-        command_digest=command_digest,
-        input_root_digest=input_root_digest,
-        do_not_cache=False
-    )
-    action_bytes = action_proto.SerializeToString()
-    action_digest = remote_execution_pb2.Digest(
-        hash=hashlib.sha256(action_bytes).hexdigest(),
-        size_bytes=len(action_bytes)
-    )
-
-    return (action_digest, action_bytes, command_digest, command_bytes,
-            input_root_digest, input_root_bytes)
+        return benchmark_lib.percentile(data, percentile)
 
 
 def execute_action(
@@ -229,22 +174,14 @@ def run_execution_load_test(
         command = ["echo", "hello"]  # Simple fast action
     
     print(f"Connecting to {server}...")
-    
-    # Configure channel with keepalive timeouts
-    # Using relaxed settings for CI environment to reduce network overhead
-    channel_options = [
-        ('grpc.keepalive_time_ms', 30000),      # 30 seconds
-        ('grpc.keepalive_timeout_ms', 10000),   # 10 seconds timeout
-        ('grpc.http2.max_pings_without_data', 0),
-        ('grpc.http2.min_time_between_pings_ms', 30000),
-    ]
-    channel = grpc.insecure_channel(server, options=channel_options)
+
+    channel = benchmark_lib.make_channel(server)
     execution_stub = remote_execution_pb2_grpc.ExecutionStub(channel)
-    
+
     # Create test action
     print(f"Creating test action: {' '.join(command)}")
     (action_digest, action_bytes, cmd_digest, cmd_bytes,
-     input_root_digest, input_root_bytes) = create_simple_action(command)
+     input_root_digest, input_root_bytes) = benchmark_lib.create_simple_action(command)
 
     # Upload action, command and input root to CAS first
     cas_stub = remote_execution_pb2_grpc.ContentAddressableStorageStub(channel)
@@ -373,7 +310,6 @@ def main():
     
     # Export to JSON if requested
     if args.output:
-        import json
         result_dict = {
             'server': summary.server,
             'total_actions': summary.total_actions,
@@ -391,8 +327,7 @@ def main():
                 'stddev': statistics.stdev(summary.latencies) if len(summary.latencies) > 1 else 0,
             }
         }
-        with open(args.output, 'w') as f:
-            json.dump(result_dict, f, indent=2)
+        benchmark_lib.save_json(args.output, result_dict)
         print(f"\nResults exported to: {args.output}")
 
 

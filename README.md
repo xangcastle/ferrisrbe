@@ -179,37 +179,30 @@ Compare to Java-based alternatives that idle at 500MB+ and spike to 4GB+ during 
 
 ### Running Benchmarks
 
-The benchmark suite tests eight critical dimensions of RBE performance:
+The benchmark suite tests eight critical dimensions of RBE performance and is now fully Bazelized:
 
 ```bash
-cd benchmark
+# Run the full container-native benchmark suite
+bazel run //benchmark:run -- full
 
-# 1. Memory footprint (baseline)
-./scripts/benchmark.sh
+# Or run the lightweight PR validation suite
+bazel run //benchmark:run -- light
 
-# 2. Execution API throughput (Zero-GC advantage)
-./scripts/execution-load-test.py --actions 1000 --concurrent 50
+# Compare the local image against the official Docker Hub release
+bazel run //benchmark:run -- compare --image ferrisrbe/server:latest
 
-# 3. Action Cache performance (L1 DashMap + L2 disk-backed)
-./scripts/action-cache-test.py --operations 10000 --concurrent 100
-
-# 4. Multi-level scheduler (no head-of-line blocking)
-./scripts/noisy-neighbor-test.py --slow 10 --fast 50
-
-# 5. O(1) Streaming (constant memory with large files)
-./scripts/o1-streaming-test.py --large-sizes 5 10 --small-count 1000
-
-# 6. Connection churn (resource cleanup)
-./scripts/connection-churn-test.py --connections 1000 --disconnect-rate 0.3
-
-# 7. Cache stampede (thundering herd protection)
-./scripts/cache-stampede-test.py --requests 10000 --concurrent 100
-
-# 8. Cold start time (<100ms vs 5-30s JVM)
-./scripts/cold-start-test.sh
+# Generate a markdown report from existing JSON results
+bazel run //benchmark:run -- report
 ```
 
-See [benchmark/README.md](benchmark/README.md) for detailed benchmark documentation and [benchmark/results/BENCHMARK_RESULTS.md](benchmark/results/BENCHMARK_RESULTS.md) for results.
+Individual benchmark scripts are also available as Bazel targets, for example:
+
+```bash
+bazel run //benchmark/scripts:execution_load_test -- --actions 1000 --concurrent 50
+bazel run //benchmark/scripts:action_cache_test -- --operations 10000 --concurrent 100
+```
+
+See [benchmark/README.md](benchmark/README.md) for detailed benchmark documentation.
 
 ## Quick Start
 

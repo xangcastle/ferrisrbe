@@ -9,28 +9,20 @@ JVM solutions often OOM or suffer GC pauses when buffering large files.
 
 import argparse
 import hashlib
-import os
-import sys
-import time
 import statistics
 import tempfile
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import grpc
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'proto_gen'))
-
-try:
-    from build.bazel.remote.execution.v2 import remote_execution_pb2
-    from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
-    from google.bytestream import bytestream_pb2
-    from google.bytestream import bytestream_pb2_grpc
-except ImportError:
-    print("Warning: Protocol buffer modules not found.")
-    sys.exit(1)
+from build.bazel.remote.execution.v2 import remote_execution_pb2
+from build.bazel.remote.execution.v2 import remote_execution_pb2_grpc
+from google.bytestream import bytestream_pb2
+from google.bytestream import bytestream_pb2_grpc
 
 
 @dataclass
@@ -127,7 +119,7 @@ def get_container_memory(container_name: str) -> float:
     import subprocess
     try:
         result = subprocess.run(
-            ['docker', 'stats', container_name, '--no-stream', '--format', '{{.MemUsage}}'],
+            ['podman', 'stats', container_name, '--no-stream', '--format', '{{.MemUsage}}'],
             capture_output=True, text=True, timeout=5
         )
         mem_str = result.stdout.strip().split('/')[0].strip()

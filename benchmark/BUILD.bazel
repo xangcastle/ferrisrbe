@@ -1,0 +1,22 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+py_binary(
+    name = "run",
+    srcs = ["orchestrator.py"],
+    main = "orchestrator.py",
+    deps = [
+        "//benchmark/scripts:benchmark_lib",
+    ],
+)
+
+# Convenience target to build every benchmark artefact without running tests.
+filegroup(
+    name = "all",
+    srcs = [
+        ":run",
+        "//benchmark/proto:reapi_py_proto",
+        "//benchmark/scripts:all",
+    ],
+)
