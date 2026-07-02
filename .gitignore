@@ -7,3 +7,8 @@ MODULE.bazel.lock
 node_modules
 ui/dist
 .bes
+_site/
+
+# Benchmark generated results
+benchmark/results/*
+!benchmark/results/.gitkeep

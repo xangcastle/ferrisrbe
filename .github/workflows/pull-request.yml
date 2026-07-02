@@ -191,57 +191,22 @@ jobs:
         run: |
           kind delete cluster --name ferrisrbe-test || true
 
-      - name: Install benchmark dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip bc netcat-openbsd
-          pip3 install grpcio grpcio-tools
-
-      - name: Start benchmark cache service
-        run: |
-          docker run -d --name rbe-cache \
-            -p 9094:9094 \
-            -p 8080:8080 \
-            -e RUST_LOG=info \
-            -e RBE_CACHE_PORT=9094 \
-            -e RBE_CACHE_HTTP_PORT=8080 \
-            -e RBE_CACHE_DIR=/data \
-            -e RBE_CACHE_MAX_SIZE_GB=1 \
-            -e RBE_CACHE_AC_MAX_SIZE_GB=1 \
-            ferrisrbe/cache:latest
-
-      - name: Wait for benchmark cache service
-        run: |
-          for i in $(seq 1 30); do
-            if nc -zv localhost 9094 2>/dev/null; then
-              echo "Cache service is ready"
-              exit 0
-            fi
-            echo "Waiting for cache service... ($i/30)"
-            sleep 1
-          done
-          echo "Cache service did not become ready"
-          docker logs rbe-cache
-          exit 1
-
-      - name: Run full benchmark suite
+      - name: Run benchmark suite
         id: benchmark
         run: |
-          cd benchmark
-          ./scripts/benchmark-ci.sh full
+          bazel run //benchmark:run -- full --cache-image ferrisrbe/cache:latest
         continue-on-error: true
 
       - name: Compare PR vs official release
         id: compare
         run: |
-          cd benchmark
-          ./scripts/compare-branches.sh ferrisrbe/server:latest
+          bazel run //benchmark:run -- compare --image ferrisrbe/server:latest
         continue-on-error: true
 
       - name: Check regression thresholds
         id: regression
         run: |
-          python3 benchmark/scripts/check-regression.py benchmark/results/benchmark_data.json
+          bazel run //benchmark/scripts:check_regression -- benchmark/results/benchmark_data.json
         continue-on-error: true
 
       - name: Upload benchmark results

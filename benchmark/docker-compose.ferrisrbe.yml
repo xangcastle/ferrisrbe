@@ -6,8 +6,8 @@
 #   bazel run //oci:worker_load
 #   bazel run //oci:cache_load
 #
-# Or use:
-#   cd benchmark && ./scripts/build-with-bazel.sh image
+# Then run the benchmark orchestrator:
+#   bazel run //benchmark:run -- light
 
 version: "3.8"
 

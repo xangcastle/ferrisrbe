@@ -16,9 +16,8 @@
 #   bazel run //oci:cache_load_amd64
 #
 #   # Run benchmarks
-#   cd benchmark
 #   docker-compose -f docker-compose.benchmark.yml up -d
-#   ./scripts/benchmark-ci.sh light
+#   bazel run //benchmark:run -- light
 #   docker-compose -f docker-compose.benchmark.yml down
 
 version: "3.8"

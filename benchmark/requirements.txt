@@ -1,0 +1,7 @@
+# Python dependencies for the FerrisRBE benchmark suite.
+# These are consumed by rules_python via pip.parse in MODULE.bazel.
+
+grpcio==1.64.1
+grpcio-tools==1.64.1
+protobuf==5.27.2
+setuptools==70.3.0
