@@ -1,13 +1,15 @@
-import { Routes, Route } from 'react-router-dom';
-import Layout from './components/Layout';
-import Dashboard from './pages/Dashboard';
-import Builds from './pages/Builds';
-import BuildDetail from './pages/BuildDetail';
-import Misses from './pages/Misses';
-import Targets from './pages/Targets';
-import TargetDetail from './pages/TargetDetail';
-import Tests from './pages/Tests';
-import TestDetail from './pages/TestDetail';
+import { Routes, Route } from "react-router-dom";
+import Layout from "./components/Layout";
+import Dashboard from "./pages/Dashboard";
+import Builds from "./pages/Builds";
+import BuildDetail from "./pages/BuildDetail";
+import Misses from "./pages/Misses";
+import Targets from "./pages/Targets";
+import TargetDetail from "./pages/TargetDetail";
+import Tests from "./pages/Tests";
+import TestDetail from "./pages/TestDetail";
+import Workers from "./pages/Workers";
+import Externals from "./pages/Externals";
 
 export default function App() {
   return (
@@ -21,6 +23,8 @@ export default function App() {
         <Route path="targets/:label" element={<TargetDetail />} />
         <Route path="tests" element={<Tests />} />
         <Route path="tests/:label" element={<TestDetail />} />
+        <Route path="workers" element={<Workers />} />
+        <Route path="externals" element={<Externals />} />
       </Route>
     </Routes>
   );

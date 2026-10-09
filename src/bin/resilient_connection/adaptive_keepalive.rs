@@ -1,59 +1,44 @@
+//! Keepalive interval that adapts to observed network conditions.
+
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-#[allow(unused_imports)]
 use tracing::{debug, info, warn};
 
-/// Adaptive keepalive that adjusts interval based on network conditions
+/// Round-trip samples kept for latency statistics.
+const RTT_HISTORY_LEN: usize = 100;
+/// Minimum time between two interval increases.
+const INCREASE_COOLDOWN: Duration = Duration::from_secs(30);
+/// Minimum time between two interval decreases.
+const DECREASE_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Keepalive interval that trades probe traffic for failure detection speed.
 ///
-/// Strategy:
-/// - Start with conservative interval (e.g., 15s)
-/// - If all keepalives succeed for N consecutive attempts, increase interval (up to max)
-/// - If any keepalive fails, immediately decrease interval (down to min)
-/// - Track latency to detect network degradation early
+/// After `adjustment_threshold` consecutive successes the interval grows by
+/// 25%, at most once per [`INCREASE_COOLDOWN`] and never above the maximum.
+/// Every failure halves it, at most once per [`DECREASE_COOLDOWN`] and never
+/// below the minimum. Round trips feed [`is_network_degraded`](Self::is_network_degraded).
 #[allow(dead_code)]
 pub struct AdaptiveKeepalive {
-    /// Current keepalive interval
     current_interval_secs: u64,
-    /// Minimum allowed interval (aggressive keepalive)
-    #[allow(dead_code)]
     min_interval_secs: u64,
-    /// Maximum allowed interval (conservative)
-    #[allow(dead_code)]
     max_interval_secs: u64,
-    /// How many consecutive successes before increasing interval
-    #[allow(dead_code)]
     adjustment_threshold: u32,
-    /// Consecutive successful keepalives
-    #[allow(dead_code)]
     consecutive_successes: u32,
-    /// Consecutive failed keepalives
-    #[allow(dead_code)]
     consecutive_failures: u32,
-    /// History of round-trip times for latency tracking
     rtt_history: VecDeque<Duration>,
-    /// Maximum RTT history size
-    #[allow(dead_code)]
-    max_rtt_history: usize,
-    /// Last adjustment time
     last_adjustment: Instant,
-    /// Cooldown between adjustments
-    #[allow(dead_code)]
-    adjustment_cooldown: Duration,
 }
 
+/// Snapshot of an [`AdaptiveKeepalive`]; round trips in milliseconds, zero
+/// when none has been recorded.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct KeepaliveStats {
-    #[allow(dead_code)]
     pub current_interval_secs: u64,
-    #[allow(dead_code)]
     pub consecutive_successes: u32,
-    #[allow(dead_code)]
     pub consecutive_failures: u32,
-    #[allow(dead_code)]
     pub average_rtt_ms: u64,
-    #[allow(dead_code)]
     pub max_rtt_ms: u64,
-    #[allow(dead_code)]
     pub min_rtt_ms: u64,
 }
 
@@ -71,25 +56,19 @@ impl AdaptiveKeepalive {
             adjustment_threshold,
             consecutive_successes: 0,
             consecutive_failures: 0,
-            rtt_history: VecDeque::with_capacity(100),
-            max_rtt_history: 100,
-            // In tests start with a cooldown already elapsed so adjustments apply immediately.
-            #[cfg(test)]
-            last_adjustment: Instant::now() - Duration::from_secs(60),
-            #[cfg(not(test))]
-            last_adjustment: Instant::now(),
-            adjustment_cooldown: Duration::from_secs(30),
+            rtt_history: VecDeque::with_capacity(RTT_HISTORY_LEN),
+            last_adjustment: initial_last_adjustment(),
         }
     }
 
-    /// Record a successful keepalive with measured RTT
+    /// Records a successful keepalive and its round trip.
     #[allow(dead_code)]
     pub fn record_success(&mut self, rtt: Duration) {
         self.consecutive_successes += 1;
         self.consecutive_failures = 0;
 
         self.rtt_history.push_back(rtt);
-        if self.rtt_history.len() > self.max_rtt_history {
+        if self.rtt_history.len() > RTT_HISTORY_LEN {
             self.rtt_history.pop_front();
         }
 
@@ -101,7 +80,7 @@ impl AdaptiveKeepalive {
         self.maybe_increase_interval();
     }
 
-    /// Record a failed keepalive
+    /// Records a failed keepalive.
     #[allow(dead_code)]
     pub fn record_failure(&mut self) {
         self.consecutive_failures += 1;
@@ -115,12 +94,12 @@ impl AdaptiveKeepalive {
         self.decrease_interval();
     }
 
-    /// Get current recommended interval
+    /// The interval to wait before the next keepalive.
     pub fn current_interval(&self) -> Duration {
         Duration::from_secs(self.current_interval_secs)
     }
 
-    /// Get statistics for observability
+    /// Current [`KeepaliveStats`].
     pub fn stats(&self) -> KeepaliveStats {
         let (avg, max, min) = if self.rtt_history.is_empty() {
             (0, 0, 0)
@@ -148,7 +127,7 @@ impl AdaptiveKeepalive {
 
     #[allow(dead_code)]
     fn maybe_increase_interval(&mut self) {
-        if Instant::now().duration_since(self.last_adjustment) < self.adjustment_cooldown {
+        if self.last_adjustment.elapsed() < INCREASE_COOLDOWN {
             return;
         }
 
@@ -175,7 +154,7 @@ impl AdaptiveKeepalive {
 
     #[allow(dead_code)]
     fn decrease_interval(&mut self) {
-        if Instant::now().duration_since(self.last_adjustment) < Duration::from_secs(5) {
+        if self.last_adjustment.elapsed() < DECREASE_COOLDOWN {
             return;
         }
 
@@ -191,7 +170,7 @@ impl AdaptiveKeepalive {
         }
     }
 
-    /// Reset to initial state (e.g., after reconnection)
+    /// Returns to `initial_interval_secs` with no history, as on a new connection.
     pub fn reset(&mut self, initial_interval_secs: u64) {
         info!("Resetting adaptive keepalive to {}s", initial_interval_secs);
         self.current_interval_secs = initial_interval_secs;
@@ -201,7 +180,8 @@ impl AdaptiveKeepalive {
         self.last_adjustment = Instant::now();
     }
 
-    /// Check if network appears degraded (high RTT variance or recent failures)
+    /// Whether the last keepalive failed, or the mean of the last 10 round
+    /// trips exceeds twice the mean of the 10 before them.
     #[allow(dead_code)]
     pub fn is_network_degraded(&self) -> bool {
         if self.consecutive_failures > 0 {
@@ -226,6 +206,18 @@ impl AdaptiveKeepalive {
     }
 }
 
+/// The adjustment timestamp a new keepalive starts from. Tests start with
+/// both cooldowns already elapsed so that the first adjustment applies at
+/// once; production starts the cooldown at construction.
+fn initial_last_adjustment() -> Instant {
+    let now = Instant::now();
+    if cfg!(test) {
+        now.checked_sub(Duration::from_secs(60)).unwrap_or(now)
+    } else {
+        now
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,8 +233,6 @@ mod tests {
         let mut ak = AdaptiveKeepalive::new(20, 5, 60, 3);
 
         ak.record_failure();
-
-        // Should decrease by 50%
         assert_eq!(ak.current_interval().as_secs(), 10);
     }
 
@@ -269,10 +259,9 @@ mod tests {
     }
 
     #[test]
-    fn test_stats() {
-        // Use a high adjustment threshold so the stats are read before any
-        // interval adjustment resets the consecutive-success counter.
-        let mut ak = AdaptiveKeepalive::new(15, 5, 60, 100);
+    fn stats_report_rtt_and_success_streak() {
+        let threshold_above_sample_count = 100;
+        let mut ak = AdaptiveKeepalive::new(15, 5, 60, threshold_above_sample_count);
 
         ak.record_success(Duration::from_millis(10));
         ak.record_success(Duration::from_millis(20));

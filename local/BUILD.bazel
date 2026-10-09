@@ -1,0 +1,14 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+sh_binary(
+    name = "up",
+    srcs = ["up.sh"],
+    args = [
+        "$(rootpath //:server)",
+        "$(rootpaths //oci:worker.arm64)",
+    ],
+    data = [
+        "//:server",
+        "//oci:worker.arm64",
+    ],
+)

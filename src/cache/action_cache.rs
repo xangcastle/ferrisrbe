@@ -1,23 +1,54 @@
+//! In-memory (L1) Action Cache and the store interface shared with the
+//! disk-backed L2 cache.
+//!
+//! The L1 cache bounds both entry count and entry age: a full cache evicts
+//! its least recently used entry, and every entry expires `ttl` after it was
+//! written, however often it is read.
+
+use crate::cache::lru::LruState;
 use crate::proto::build::bazel::remote::execution::v2::ActionResult as ProtoActionResult;
-use crate::types::{AtomicInstant, DigestInfo, Result, DASHMAP_SHARD_COUNT};
+use crate::types::{DigestInfo, DASHMAP_SHARD_COUNT};
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
-use std::sync::Arc;
+use std::collections::BinaryHeap;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, warn};
 
-/// Environment variable for L1 cache capacity (number of entries)
+/// Environment variable for the L1 cache capacity, in entries.
 pub const ENV_L1_CACHE_CAPACITY: &str = "RBE_L1_CACHE_CAPACITY";
-/// Environment variable for L1 cache TTL in seconds
+/// Environment variable for the L1 cache entry TTL, in seconds.
 pub const ENV_L1_CACHE_TTL_SECS: &str = "RBE_L1_CACHE_TTL_SECS";
 
-/// Entry for the expiration heap - allows O(1) access to next expiring item
+const DEFAULT_L1_CAPACITY: usize = 100_000;
+const DEFAULT_L1_TTL_SECS: u64 = 3600;
+
+/// Tier at which an Action Cache lookup was satisfied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionCacheHitTier {
+    /// Hit in the in-memory L1 cache.
+    L1,
+    /// Hit in the persistent L2 cache.
+    L2,
+    /// Hit in the object store shared by every server.
+    Remote,
+    /// Miss in both caches.
+    Miss,
+}
+
+/// Result of an Action Cache lookup and the tier that answered it.
+#[derive(Debug, Clone)]
+pub struct ActionCacheGetResult {
+    pub result: Option<CacheActionResult>,
+    pub tier: ActionCacheHitTier,
+}
+
+/// Expiration record ordered by deadline, so the soonest-expiring entry is
+/// always at the top of the heap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExpirationEntry {
-    /// Expiration time (created_at + ttl)
+    /// `created_at + ttl` of the cache entry this record tracks.
     expires_at: Instant,
     digest: DigestInfo,
 }
@@ -34,32 +65,25 @@ impl PartialOrd for ExpirationEntry {
     }
 }
 
+/// A cached value with the write time and lifetime that bound its validity.
 #[derive(Debug, Clone)]
-pub struct CacheEntry<T> {
-    pub data: T,
-    pub created_at: Instant,
-    pub ttl: Duration,
-    #[allow(dead_code)]
-    pub access_count: u64,
+struct CacheEntry<T> {
+    data: T,
+    created_at: Instant,
+    ttl: Duration,
 }
 
 impl<T> CacheEntry<T> {
-    pub fn new(data: T, ttl: Duration) -> Self {
+    fn new(data: T, ttl: Duration) -> Self {
         Self {
             data,
             created_at: Instant::now(),
             ttl,
-            access_count: 1,
         }
     }
 
-    pub fn is_expired(&self) -> bool {
+    fn is_expired(&self) -> bool {
         self.created_at.elapsed() > self.ttl
-    }
-
-    #[allow(dead_code)]
-    pub fn touch(&mut self) {
-        self.access_count += 1;
     }
 }
 
@@ -74,21 +98,33 @@ pub struct CacheActionResult {
 }
 
 impl CacheActionResult {
+    /// Pairs an `ActionResult` with the action digest it is cached under.
     pub fn new(digest: DigestInfo, proto: ProtoActionResult) -> Self {
         Self { digest, proto }
     }
 }
 
+/// Bounded, TTL-limited in-memory Action Cache.
+///
+/// The value map is a sharded `DashMap`; the recency list and the expiration
+/// heap sit behind their own mutexes. No value-map guard is ever held while
+/// one of those mutexes is taken, so the locks cannot form a cycle.
 pub struct L1ActionCache {
     cache: DashMap<DigestInfo, CacheEntry<CacheActionResult>, ahash::RandomState>,
     max_capacity: usize,
     default_ttl: Duration,
-    lru_queue: Mutex<VecDeque<DigestInfo>>,
-    /// Min-heap ordered by expiration time for O(1) cleanup of expired entries
+    /// Recency of `cache` entries, updated on hits, inserts and removals so
+    /// that eviction follows use rather than insertion order.
+    lru: Mutex<LruState>,
+    /// Expiration records ordered by deadline. A record can outlive its entry
+    /// (evicted or rewritten); such records are skipped when popped, and the
+    /// heap is compacted once it grows past twice the cache capacity.
     expiration_heap: Mutex<BinaryHeap<Reverse<ExpirationEntry>>>,
 }
 
 impl L1ActionCache {
+    /// An empty cache holding at most `max_capacity` entries, each valid for
+    /// `default_ttl` after it is written.
     pub fn new(max_capacity: usize, default_ttl: Duration) -> Self {
         let cache = DashMap::with_capacity_and_hasher_and_shard_amount(
             max_capacity,
@@ -100,39 +136,43 @@ impl L1ActionCache {
             cache,
             max_capacity,
             default_ttl,
-            lru_queue: Mutex::new(VecDeque::with_capacity(max_capacity)),
+            lru: Mutex::new(LruState::new()),
             expiration_heap: Mutex::new(BinaryHeap::with_capacity(max_capacity)),
         }
     }
 
+    /// The live entry for `digest`, marked most recently used. An expired
+    /// entry is removed and reported as a miss.
     pub fn get(&self, digest: &DigestInfo) -> Option<CacheActionResult> {
         let entry = self.cache.get(digest)?;
 
         if entry.is_expired() {
             drop(entry);
-            self.cache.remove(digest);
+            self.remove_entry(digest);
             return None;
         }
 
         let result = entry.data.clone();
         drop(entry);
 
+        self.lru.lock().touch(*digest, 0);
+
         debug!("L1 cache hit for digest: {:?}", digest);
         Some(result)
     }
 
+    /// Stores `result` for `digest` with a fresh TTL, first evicting the least
+    /// recently used entry when a new key would exceed capacity.
     pub fn put(&self, digest: DigestInfo, result: CacheActionResult) {
-        if self.cache.len() >= self.max_capacity {
-            self.evict_oldest();
+        if !self.cache.contains_key(&digest) && self.cache.len() >= self.max_capacity {
+            self.evict_lru();
         }
 
         let entry = CacheEntry::new(result, self.default_ttl);
         let expires_at = entry.created_at + entry.ttl;
         self.cache.insert(digest, entry);
 
-        let mut queue = self.lru_queue.lock();
-        queue.push_back(digest);
-        drop(queue);
+        self.lru.lock().touch(digest, 0);
 
         let mut heap = self.expiration_heap.lock();
         heap.push(Reverse(ExpirationEntry { expires_at, digest }));
@@ -154,8 +194,8 @@ impl L1ActionCache {
         debug!("L1 cache insert for digest: {:?}", digest);
     }
 
-    /// Prune "ghost" entries from expiration heap (entries not in cache anymore)
-    /// This prevents memory leak when LRU evicts but heap still references them.
+    /// Drops expiration records whose entry is no longer cached, bounding the
+    /// heap by the live entries. Linear in the heap size.
     fn prune_ghost_entries(&self) {
         let mut heap = self.expiration_heap.lock();
 
@@ -176,14 +216,14 @@ impl L1ActionCache {
         }
     }
 
-    #[allow(dead_code)]
+    /// Removes the entry for `digest`, if any.
     pub fn invalidate(&self, digest: &DigestInfo) {
-        self.cache.remove(digest);
+        self.remove_entry(digest);
         debug!("L1 cache invalidate for digest: {:?}", digest);
     }
 
-    /// Cleanup expired entries using the expiration heap - O(k) where k = expired entries
-    /// instead of O(n) scanning the entire cache.
+    /// Removes every expired entry. Only the expired prefix of the expiration
+    /// heap is walked, so the cost follows what expired, not the cache size.
     pub fn cleanup_expired(&self) {
         let now = Instant::now();
         let mut expired_count = 0;
@@ -199,7 +239,7 @@ impl L1ActionCache {
             if let Some(cache_entry) = self.cache.get(&entry.digest) {
                 if cache_entry.is_expired() {
                     drop(cache_entry);
-                    self.cache.remove(&entry.digest);
+                    self.remove_entry(&entry.digest);
                     expired_count += 1;
                 }
             }
@@ -210,24 +250,29 @@ impl L1ActionCache {
         }
     }
 
-    fn evict_oldest(&self) {
-        let mut queue = self.lru_queue.lock();
-        while let Some(digest) = queue.pop_front() {
+    /// Removes an entry from both the value map and the recency list.
+    fn remove_entry(&self, digest: &DigestInfo) {
+        self.cache.remove(digest);
+        self.lru.lock().remove(*digest);
+    }
+
+    fn evict_lru(&self) {
+        let mut lru = self.lru.lock();
+        while let Some((digest, _)) = lru.pop_lru() {
             if self.cache.remove(&digest).is_some() {
-                debug!("Evicted oldest cache entry: {:?}", digest);
+                debug!("Evicted LRU cache entry: {:?}", digest);
                 break;
             }
         }
     }
 
-    #[allow(dead_code)]
+    /// Number of cached entries, including expired ones not yet collected.
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.cache.len() == 0
+        self.cache.is_empty()
     }
 }
 
@@ -238,190 +283,61 @@ impl Default for L1ActionCache {
 }
 
 impl L1ActionCache {
-    /// Create configuration from environment variables (12-Factor App style)
+    /// A cache sized by [`ENV_L1_CACHE_CAPACITY`] and [`ENV_L1_CACHE_TTL_SECS`],
+    /// defaulting to 100 000 entries valid for one hour.
     pub fn from_env() -> Self {
         let capacity = std::env::var(ENV_L1_CACHE_CAPACITY)
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(100_000);
+            .unwrap_or(DEFAULT_L1_CAPACITY);
 
         let ttl_secs = std::env::var(ENV_L1_CACHE_TTL_SECS)
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(3600);
+            .unwrap_or(DEFAULT_L1_TTL_SECS);
 
         Self::new(capacity, Duration::from_secs(ttl_secs))
     }
 }
 
-/// Generic store interface used by `ActionCacheService`.
-///
-/// Both the in-memory L1 cache and the disk-backed L2 cache implement this so
-/// the service can work with either backend.
+/// Store interface behind `ActionCacheService`, implemented by the in-memory
+/// L1 cache and by the disk-backed two-tier cache.
 #[async_trait::async_trait]
 pub trait ActionCacheStore: Send + Sync {
+    /// The cached result for `digest`, if any.
     async fn get(&self, digest: &DigestInfo) -> Option<CacheActionResult>;
+
+    /// The cached result for `digest` and the tier that answered. Single-tier
+    /// stores report every hit as [`ActionCacheHitTier::L1`].
+    async fn get_with_tier(&self, digest: &DigestInfo) -> ActionCacheGetResult {
+        let result = self.get(digest).await;
+        let tier = if result.is_some() {
+            ActionCacheHitTier::L1
+        } else {
+            ActionCacheHitTier::Miss
+        };
+        ActionCacheGetResult { result, tier }
+    }
+
+    /// Stores `result` for `digest`, replacing any previous entry.
     async fn put(&self, digest: DigestInfo, result: CacheActionResult);
+
+    /// Removes the entry for `digest`; stores without removal ignore the call.
+    async fn remove(&self, _digest: &DigestInfo) {}
 }
 
 #[async_trait::async_trait]
 impl ActionCacheStore for L1ActionCache {
+    async fn remove(&self, digest: &DigestInfo) {
+        self.invalidate(digest);
+    }
+
     async fn get(&self, digest: &DigestInfo) -> Option<CacheActionResult> {
         L1ActionCache::get(self, digest)
     }
 
     async fn put(&self, digest: DigestInfo, result: CacheActionResult) {
         L1ActionCache::put(self, digest, result);
-    }
-}
-
-#[allow(dead_code)]
-#[async_trait::async_trait]
-pub trait L2Store: Send + Sync {
-    async fn get(&self, digest: &DigestInfo) -> Result<Option<CacheActionResult>>;
-    async fn put(&self, digest: &DigestInfo, result: &CacheActionResult) -> Result<()>;
-}
-
-#[allow(dead_code)]
-#[async_trait::async_trait]
-pub trait CasStore: Send + Sync {
-    async fn exists(&self, digest: &DigestInfo) -> Result<bool>;
-
-    async fn validate_references(&self, result: &CacheActionResult) -> Result<bool>;
-}
-
-#[allow(dead_code)]
-pub struct ActionCacheServer<L2, CAS>
-where
-    L2: L2Store,
-    CAS: CasStore,
-{
-    l1_cache: Arc<L1ActionCache>,
-
-    l2_store: Arc<L2>,
-
-    cas_store: Arc<CAS>,
-
-    validation_queue: Arc<Mutex<VecDeque<DigestInfo>>>,
-
-    last_heartbeat: Arc<AtomicInstant>,
-}
-
-#[allow(dead_code)]
-impl<L2, CAS> ActionCacheServer<L2, CAS>
-where
-    L2: L2Store + 'static,
-    CAS: CasStore + 'static,
-{
-    pub fn new(
-        l1_capacity: usize,
-        l1_ttl: Duration,
-        l2_store: Arc<L2>,
-        cas_store: Arc<CAS>,
-    ) -> Self {
-        Self {
-            l1_cache: Arc::new(L1ActionCache::new(l1_capacity, l1_ttl)),
-            l2_store,
-            cas_store,
-            validation_queue: Arc::new(Mutex::new(VecDeque::new())),
-            last_heartbeat: Arc::new(AtomicInstant::now()),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub async fn get(&self, digest: &DigestInfo) -> Result<Option<CacheActionResult>> {
-        if let Some(result) = self.l1_cache.get(digest) {
-            self.enqueue_validation(*digest);
-            return Ok(Some(result));
-        }
-
-        match self.l2_store.get(digest).await? {
-            Some(result) => {
-                self.l1_cache.put(*digest, result.clone());
-                Ok(Some(result))
-            }
-            None => Ok(None),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub async fn put(&self, digest: &DigestInfo, result: &CacheActionResult) -> Result<()> {
-        self.l2_store.put(digest, result).await?;
-
-        self.l1_cache.put(*digest, result.clone());
-
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn enqueue_validation(&self, digest: DigestInfo) {
-        let mut queue = self.validation_queue.lock();
-        queue.push_back(digest);
-
-        if queue.len() > 1000 {
-            queue.pop_front();
-        }
-    }
-
-    #[allow(dead_code)]
-    pub async fn process_validations(&self, batch_size: usize) -> Result<usize> {
-        let mut processed = 0;
-        let cas = self.cas_store.clone();
-        let l1 = self.l1_cache.clone();
-
-        for _ in 0..batch_size {
-            let digest = {
-                let mut queue = self.validation_queue.lock();
-                queue.pop_front()
-            };
-
-            if let Some(digest) = digest {
-                if let Some(result) = l1.get(&digest) {
-                    match cas.validate_references(&result).await {
-                        Ok(true) => {
-                            debug!("Validation passed for {:?}", digest);
-                        }
-                        Ok(false) => {
-                            warn!("Validation failed for {:?}, invalidating", digest);
-                            l1.invalidate(&digest);
-                        }
-                        Err(e) => {
-                            warn!("Validation error for {:?}: {}", digest, e);
-                        }
-                    }
-                }
-                processed += 1;
-            } else {
-                break;
-            }
-        }
-
-        Ok(processed)
-    }
-
-    #[allow(dead_code)]
-    pub fn spawn_validation_task(self: Arc<Self>, interval: Duration) {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(interval);
-            loop {
-                interval.tick().await;
-                if let Err(e) = self.process_validations(100).await {
-                    warn!("Background validation error: {}", e);
-                }
-
-                self.l1_cache.cleanup_expired();
-            }
-        });
-    }
-
-    #[allow(dead_code)]
-    pub fn heartbeat(&self) {
-        self.last_heartbeat.refresh();
-    }
-
-    #[allow(dead_code)]
-    pub fn is_healthy(&self) -> bool {
-        self.last_heartbeat.elapsed_millis() < 30_000
     }
 }
 
@@ -475,5 +391,66 @@ mod tests {
         }
 
         assert!(cache.len() <= 2);
+    }
+
+    #[test]
+    fn test_l1_cache_evicts_least_recently_used_not_first_inserted() {
+        let cache = L1ActionCache::new(2, Duration::from_secs(60));
+        let a = DigestInfo::new(&format!("{:064x}", 1), 8).unwrap();
+        let b = DigestInfo::new(&format!("{:064x}", 2), 8).unwrap();
+        let c = DigestInfo::new(&format!("{:064x}", 3), 8).unwrap();
+
+        cache.put(a, sample_result(a, 1));
+        cache.put(b, sample_result(b, 2));
+        cache.get(&a);
+
+        cache.put(c, sample_result(c, 3));
+
+        assert!(cache.get(&a).is_some(), "recently used entry must survive");
+        assert!(
+            cache.get(&b).is_none(),
+            "least recently used must be evicted"
+        );
+        assert!(cache.get(&c).is_some());
+    }
+
+    #[test]
+    fn test_l1_cache_reput_moves_to_mru_without_duplicating_slot() {
+        let cache = L1ActionCache::new(2, Duration::from_secs(60));
+        let a = DigestInfo::new(&format!("{:064x}", 1), 8).unwrap();
+        let b = DigestInfo::new(&format!("{:064x}", 2), 8).unwrap();
+        let c = DigestInfo::new(&format!("{:064x}", 3), 8).unwrap();
+
+        cache.put(a, sample_result(a, 1));
+        cache.put(b, sample_result(b, 2));
+        cache.put(a, sample_result(a, 1));
+
+        cache.put(c, sample_result(c, 3));
+
+        assert!(cache.get(&a).is_some());
+        assert!(cache.get(&b).is_none());
+        assert!(cache.get(&c).is_some());
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_l1_cache_invalidate_frees_recency_slot() {
+        let cache = L1ActionCache::new(2, Duration::from_secs(60));
+        let a = DigestInfo::new(&format!("{:064x}", 1), 8).unwrap();
+        let b = DigestInfo::new(&format!("{:064x}", 2), 8).unwrap();
+        let c = DigestInfo::new(&format!("{:064x}", 3), 8).unwrap();
+        let d = DigestInfo::new(&format!("{:064x}", 4), 8).unwrap();
+
+        cache.put(a, sample_result(a, 1));
+        cache.put(b, sample_result(b, 2));
+        cache.invalidate(&a);
+        cache.put(c, sample_result(c, 3));
+        cache.put(d, sample_result(d, 4));
+
+        assert!(cache.get(&a).is_none());
+        assert!(cache.get(&b).is_none(), "b was LRU when d was inserted");
+        assert!(cache.get(&c).is_some());
+        assert!(cache.get(&d).is_some());
+        assert_eq!(cache.len(), 2);
     }
 }

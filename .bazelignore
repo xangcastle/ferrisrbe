@@ -1,7 +1,2 @@
-./bazel-*/
-./examples/**/bazel-*/
-examples/
-.bazel/
-target/
-logs_*
-.cache
+ui/node_modules
+conformance/clients

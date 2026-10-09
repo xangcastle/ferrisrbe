@@ -1,0 +1,60 @@
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//ui:typescript/package_json.bzl", typescript_bin = "bin")
+load("@rules_vite//:defs.bzl", "vite_build", "vite_run")
+
+npm_link_all_packages(name = "node_modules")
+
+SRCS = glob(
+    ["src/**"],
+    exclude = ["src/shadcn/**"],
+) + [
+    "index.html",
+    "package.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+]
+
+vite_build(
+    name = "dist",
+    srcs = SRCS,
+    config = "vite.config.ts",
+    inject_dir = "src/shadcn",
+    inject_strip = "components/",
+    injected_srcs = ["@shadcn//:all_files"],
+    node_modules = ":node_modules",
+    vite = ":node_modules/vite",
+    visibility = ["//visibility:public"],
+)
+
+vite_run(
+    name = "dev",
+    inject_dir = "src/shadcn",
+    node_modules = ":node_modules",
+    shared_srcs = ["@shadcn//:all_files"],
+    vite_entry = "ui/node_modules/vite/bin/vite.js",
+)
+
+# tsc resolves src/shadcn/* where vite_build injects the components.
+copy_to_directory(
+    name = "shadcn_tree",
+    srcs = ["@shadcn//:all_files"],
+    out = "src/shadcn",
+    include_external_repositories = ["*"],
+    replace_prefixes = {"components/": ""},
+)
+
+typescript_bin.tsc_test(
+    name = "typecheck",
+    args = [
+        "--noEmit",
+        "-p",
+        "tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = SRCS + [
+        "vite.config.ts",
+        ":node_modules",
+        ":shadcn_tree",
+    ],
+)

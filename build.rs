@@ -102,12 +102,28 @@ fn main() -> Result<()> {
     let remote_execution_proto =
         resolve_proto_file("proto/build/bazel/remote/execution/v2/remote_execution.proto")
             .expect("remote_execution.proto not found");
+    let remote_asset_proto =
+        resolve_proto_file("proto/build/bazel/remote/asset/v1/remote_asset.proto")
+            .expect("remote_asset.proto not found");
     let semver_proto = resolve_proto_file("proto/build/bazel/semver/semver.proto")
         .expect("semver.proto not found");
-    let build_event_stream_proto = resolve_proto_file(
-        "proto/build/bazel/build_event_stream/build_event_stream_minimal.proto",
-    )
-    .expect("build_event_stream_minimal.proto not found");
+    let timestamp_proto = resolve_proto_file("proto/google/protobuf/timestamp.proto")
+        .expect("timestamp.proto not found");
+    let build_event_stream_proto =
+        resolve_proto_file("proto/build/bazel/build_event_stream/build_event_stream.proto")
+            .expect("build_event_stream.proto not found");
+    let bazel_protos: Vec<PathBuf> = [
+        "proto/src/main/protobuf/failure_details.proto",
+        "proto/src/main/protobuf/command_line.proto",
+        "proto/src/main/protobuf/option_filters.proto",
+        "proto/src/main/protobuf/invocation_policy.proto",
+        "proto/src/main/protobuf/strategy_policy.proto",
+        "proto/src/main/protobuf/action_cache.proto",
+        "proto/src/main/java/com/google/devtools/build/lib/packages/metrics/package_load_metrics.proto",
+    ]
+    .iter()
+    .map(|rel| resolve_proto_file(rel).unwrap_or_else(|| panic!("{} not found", rel)))
+    .collect();
     let build_events_proto =
         resolve_proto_file("proto/google/devtools/build/v1/build_events.proto")
             .expect("build_events.proto not found");
@@ -135,9 +151,8 @@ fn main() -> Result<()> {
         resolve_proto_file("proto/google/api/http.proto").expect("http.proto not found");
     let client_proto =
         resolve_proto_file("proto/google/api/client.proto").expect("client.proto not found");
-    let field_behavior_proto =
-        resolve_proto_file("proto/google/api/field_behavior.proto")
-            .expect("field_behavior.proto not found");
+    let field_behavior_proto = resolve_proto_file("proto/google/api/field_behavior.proto")
+        .expect("field_behavior.proto not found");
     let spawn_proto =
         resolve_proto_file("proto/tools/protos/spawn.proto").expect("spawn.proto not found");
 
@@ -153,33 +168,39 @@ fn main() -> Result<()> {
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_else(|_| ".".to_string()));
 
+    let mut protos: Vec<&str> = bazel_protos.iter().map(|p| p.to_str().unwrap()).collect();
+    protos.extend([
+        worker_proto.to_str().unwrap(),
+        remote_execution_proto.to_str().unwrap(),
+        remote_asset_proto.to_str().unwrap(),
+        semver_proto.to_str().unwrap(),
+        timestamp_proto.to_str().unwrap(),
+        build_event_stream_proto.to_str().unwrap(),
+        build_events_proto.to_str().unwrap(),
+        build_status_proto.to_str().unwrap(),
+        publish_build_event_proto.to_str().unwrap(),
+        wrappers_proto.to_str().unwrap(),
+        duration_proto.to_str().unwrap(),
+        any_proto.to_str().unwrap(),
+        annotations_proto.to_str().unwrap(),
+        http_proto.to_str().unwrap(),
+        client_proto.to_str().unwrap(),
+        field_behavior_proto.to_str().unwrap(),
+        spawn_proto.to_str().unwrap(),
+        operations_proto.to_str().unwrap(),
+        status_proto.to_str().unwrap(),
+        bytestream_proto.to_str().unwrap(),
+    ]);
+
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
         .disable_comments(".")
-        .compile_protos(
-            &[
-                worker_proto.to_str().unwrap(),
-                remote_execution_proto.to_str().unwrap(),
-                semver_proto.to_str().unwrap(),
-                build_event_stream_proto.to_str().unwrap(),
-                build_events_proto.to_str().unwrap(),
-                build_status_proto.to_str().unwrap(),
-                publish_build_event_proto.to_str().unwrap(),
-                wrappers_proto.to_str().unwrap(),
-                duration_proto.to_str().unwrap(),
-                any_proto.to_str().unwrap(),
-                annotations_proto.to_str().unwrap(),
-                http_proto.to_str().unwrap(),
-                client_proto.to_str().unwrap(),
-                field_behavior_proto.to_str().unwrap(),
-                spawn_proto.to_str().unwrap(),
-                operations_proto.to_str().unwrap(),
-                status_proto.to_str().unwrap(),
-                bytestream_proto.to_str().unwrap(),
-            ],
-            &[proto_include.to_str().unwrap()],
-        )?;
+        .type_attribute(
+            ".ferris.rbe.worker.WorkerMessage.payload",
+            "#[allow(clippy::large_enum_variant)]",
+        )
+        .compile_protos(&protos, &[proto_include.to_str().unwrap()])?;
 
     fix_semver_references(&out_dir)?;
     fix_clippy_warnings(&out_dir)?;

@@ -1,0 +1,35 @@
+# Clients of remote-apis-testing (gitlab.com/remote-apis-testing), built for
+# the host architecture instead of x86_64 only.
+
+FROM docker.io/library/ubuntu:26.04 AS build_env
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates curl git libyaml-dev pkg-config \
+        python3 python3-setuptools tar unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM build_env AS bazel
+ARG BAZEL_VERSION
+RUN arch="$(uname -m | sed 's/aarch64/arm64/')" \
+    && name="bazel-${BAZEL_VERSION}-linux-${arch}" \
+    && cd /tmp \
+    && curl -fsSL --retry 5 -O "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/${name}" \
+    && curl -fsSL --retry 5 -O "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/${name}.sha256" \
+    && sha256sum -c "${name}.sha256" \
+    && install -m 0755 "${name}" /usr/local/bin/bazel \
+    && rm -f "${name}" "${name}.sha256"
+
+FROM build_env AS recc
+ARG BUILDBOX_VERSION
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        cmake libssl-dev libfuse3-dev uuid-dev \
+        libprotobuf-dev protobuf-compiler \
+        libgrpc-dev libgrpc++-dev protobuf-compiler-grpc \
+        libgtest-dev libgmock-dev libtomlplusplus-dev libabsl-dev \
+        libcurl4-openssl-dev nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth=1 --branch "${BUILDBOX_VERSION}" https://gitlab.com/BuildGrid/buildbox/buildbox.git /tmp/buildbox \
+    && cmake -B /tmp/buildbox/build /tmp/buildbox -DBUILD_TESTING=OFF \
+    && make -C /tmp/buildbox/build -j"$(nproc)" install \
+    && rm -rf /tmp/buildbox

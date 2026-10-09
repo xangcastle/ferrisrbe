@@ -2,6 +2,24 @@ load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
 
+IMAGE_REPO = "docker.io/xangcastle/ferris-"
+
+genrule(
+    name = "timestamp_file",
+    outs = ["timestamp.txt"],
+    cmd = "bash $(location process_timestamp.sh) $@",
+    stamp = 1,
+    tools = ["process_timestamp.sh"],
+)
+
+genrule(
+    name = "image_tags",
+    outs = ["tags.txt"],
+    cmd = "bash $(location process_tags.sh) $@",
+    stamp = 1,
+    tools = ["process_tags.sh"],
+)
+
 platform_transition_filegroup(
     name = "server.amd64",
     srcs = ["//:server"],
@@ -19,8 +37,12 @@ tar(
 oci_image(
     name = "server.amd64.image",
     base = "@debian_bookworm_slim_linux_amd64",
+    created = ":timestamp_file",
     entrypoint = ["/app/server"],
-    exposed_ports = ["9092"],
+    exposed_ports = [
+        "9094",
+        "8080",
+    ],
     tars = [":server.amd64.layer"],
     visibility = ["//visibility:public"],
 )
@@ -49,8 +71,12 @@ tar(
 oci_image(
     name = "server.arm64.image",
     base = "@debian_bookworm_slim_linux_arm64_v8",
+    created = ":timestamp_file",
     entrypoint = ["/app/server"],
-    exposed_ports = ["9092"],
+    exposed_ports = [
+        "9094",
+        "8080",
+    ],
     tars = [":server.arm64.layer"],
     visibility = ["//visibility:public"],
 )
@@ -74,7 +100,16 @@ oci_image_index(
 oci_push(
     name = "server.image.push",
     image = ":server.image.multiplatform",
-    repository = "docker.io/xangcastle/ferris-server",
+    remote_tags = ":image_tags",
+    repository = IMAGE_REPO + "server",
+    visibility = ["//visibility:public"],
+)
+
+oci_push(
+    name = "server.image.arm64.push",
+    image = ":server.arm64.image",
+    remote_tags = ":image_tags",
+    repository = IMAGE_REPO + "server",
     visibility = ["//visibility:public"],
 )
 
@@ -95,12 +130,13 @@ tar(
 oci_image(
     name = "worker.amd64.image",
     base = "@debian_bookworm_slim_linux_amd64",
+    created = ":timestamp_file",
     entrypoint = ["/app/worker"],
     env = {
         "RUST_LOG": "info",
         "WORKER_ID": "",
-        "SERVER_ENDPOINT": "http://server:9092",
-        "CAS_ENDPOINT": "http://cache:9094",
+        "SERVER_ENDPOINT": "http://server:9094",
+        "CAS_ENDPOINT": "http://server:9094",
         "WORKER_TYPE": "default",
         "WORKER_LABELS": "os=linux,arch=amd64",
         "MAX_CONCURRENT": "4",
@@ -121,6 +157,7 @@ platform_transition_filegroup(
     name = "worker.arm64",
     srcs = ["//:worker"],
     target_platform = "//platforms:linux_arm64",
+    visibility = ["//local:__pkg__"],
 )
 
 tar(
@@ -134,12 +171,13 @@ tar(
 oci_image(
     name = "worker.arm64.image",
     base = "@debian_bookworm_slim_linux_arm64_v8",
+    created = ":timestamp_file",
     entrypoint = ["/app/worker"],
     env = {
         "RUST_LOG": "info",
         "WORKER_ID": "",
-        "SERVER_ENDPOINT": "http://server:9092",
-        "CAS_ENDPOINT": "http://cache:9094",
+        "SERVER_ENDPOINT": "http://server:9094",
+        "CAS_ENDPOINT": "http://server:9094",
         "WORKER_TYPE": "default",
         "WORKER_LABELS": "os=linux,arch=arm64",
         "MAX_CONCURRENT": "4",
@@ -168,200 +206,15 @@ oci_image_index(
 oci_push(
     name = "worker.image.push",
     image = ":worker.image.multiplatform",
-    repository = "docker.io/xangcastle/ferris-worker",
-    visibility = ["//visibility:public"],
-)
-
-platform_transition_filegroup(
-    name = "cache.amd64",
-    srcs = ["//:cache"],
-    target_platform = "//platforms:linux_amd64",
-)
-
-tar(
-    name = "cache.amd64.layer",
-    srcs = [":cache.amd64"],
-    mtree = [
-        "./app/cache type=file content=$(execpath :cache.amd64)",
-    ],
-)
-
-oci_image(
-    name = "cache.amd64.image",
-    base = "@debian_bookworm_slim_linux_amd64",
-    entrypoint = ["/app/cache"],
-    env = {
-        "RUST_LOG": "info",
-        "RBE_CACHE_PORT": "9094",
-        "RBE_CACHE_HTTP_PORT": "8080",
-        "RBE_CACHE_DIR": "/data",
-        "RBE_CACHE_MAX_SIZE_GB": "100",
-        "RBE_CACHE_AC_MAX_SIZE_GB": "10",
-    },
-    exposed_ports = [
-        "9094",
-        "8080",
-    ],
-    tars = [":cache.amd64.layer"],
-    visibility = ["//visibility:public"],
-)
-
-oci_load(
-    name = "cache.amd64.image.load",
-    image = ":cache.amd64.image",
-    repo_tags = ["ferrisrbe/cache:latest"],
-    visibility = ["//visibility:public"],
-)
-
-platform_transition_filegroup(
-    name = "cache.arm64",
-    srcs = ["//:cache"],
-    target_platform = "//platforms:linux_arm64",
-)
-
-tar(
-    name = "cache.arm64.layer",
-    srcs = [":cache.arm64"],
-    mtree = [
-        "./app/cache type=file content=$(execpath :cache.arm64)",
-    ],
-)
-
-oci_image(
-    name = "cache.arm64.image",
-    base = "@debian_bookworm_slim_linux_arm64_v8",
-    entrypoint = ["/app/cache"],
-    env = {
-        "RUST_LOG": "info",
-        "RBE_CACHE_PORT": "9094",
-        "RBE_CACHE_HTTP_PORT": "8080",
-        "RBE_CACHE_DIR": "/data",
-        "RBE_CACHE_MAX_SIZE_GB": "100",
-        "RBE_CACHE_AC_MAX_SIZE_GB": "10",
-    },
-    exposed_ports = [
-        "9094",
-        "8080",
-    ],
-    tars = [":cache.arm64.layer"],
-    visibility = ["//visibility:public"],
-)
-
-oci_load(
-    name = "cache.arm64.image.load",
-    image = ":cache.arm64.image",
-    repo_tags = ["ferrisrbe/cache:latest"],
-    visibility = ["//visibility:public"],
-)
-
-oci_image_index(
-    name = "cache.image.multiplatform",
-    images = [
-        ":cache.amd64.image",
-        ":cache.arm64.image",
-    ],
+    remote_tags = ":image_tags",
+    repository = IMAGE_REPO + "worker",
     visibility = ["//visibility:public"],
 )
 
 oci_push(
-    name = "cache.image.push",
-    image = ":cache.image.multiplatform",
-    repository = "docker.io/xangcastle/ferris-cache",
-    visibility = ["//visibility:public"],
-)
-
-platform_transition_filegroup(
-    name = "bes.amd64",
-    srcs = ["//:bes"],
-    target_platform = "//platforms:linux_amd64",
-)
-
-tar(
-    name = "bes.amd64.layer",
-    srcs = [":bes.amd64"],
-    mtree = [
-        "./app/bes type=file content=$(execpath :bes.amd64)",
-    ],
-)
-
-oci_image(
-    name = "bes.amd64.image",
-    base = "@debian_bookworm_slim_linux_amd64",
-    entrypoint = ["/app/bes"],
-    env = {
-        "RUST_LOG": "info",
-        "RBE_BES_PORT": "9095",
-        "RBE_BES_UI_PORT": "9096",
-        "RBE_BES_DATA_DIR": "/data/bes",
-        "RBE_BES_STATIC_DIR": "/app/ui/dist",
-    },
-    exposed_ports = [
-        "9095",
-        "9096",
-    ],
-    tars = [":bes.amd64.layer"],
-    visibility = ["//visibility:public"],
-)
-
-oci_load(
-    name = "bes.amd64.image.load",
-    image = ":bes.amd64.image",
-    repo_tags = ["ferrisrbe/bes:latest"],
-    visibility = ["//visibility:public"],
-)
-
-platform_transition_filegroup(
-    name = "bes.arm64",
-    srcs = ["//:bes"],
-    target_platform = "//platforms:linux_arm64",
-)
-
-tar(
-    name = "bes.arm64.layer",
-    srcs = [":bes.arm64"],
-    mtree = [
-        "./app/bes type=file content=$(execpath :bes.arm64)",
-    ],
-)
-
-oci_image(
-    name = "bes.arm64.image",
-    base = "@debian_bookworm_slim_linux_arm64_v8",
-    entrypoint = ["/app/bes"],
-    env = {
-        "RUST_LOG": "info",
-        "RBE_BES_PORT": "9095",
-        "RBE_BES_UI_PORT": "9096",
-        "RBE_BES_DATA_DIR": "/data/bes",
-        "RBE_BES_STATIC_DIR": "/app/ui/dist",
-    },
-    exposed_ports = [
-        "9095",
-        "9096",
-    ],
-    tars = [":bes.arm64.layer"],
-    visibility = ["//visibility:public"],
-)
-
-oci_load(
-    name = "bes.arm64.image.load",
-    image = ":bes.arm64.image",
-    repo_tags = ["ferrisrbe/bes:latest"],
-    visibility = ["//visibility:public"],
-)
-
-oci_image_index(
-    name = "bes.image.multiplatform",
-    images = [
-        ":bes.amd64.image",
-        ":bes.arm64.image",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-oci_push(
-    name = "bes.image.push",
-    image = ":bes.image.multiplatform",
-    repository = "docker.io/xangcastle/ferris-bes",
+    name = "worker.image.arm64.push",
+    image = ":worker.arm64.image",
+    remote_tags = ":image_tags",
+    repository = IMAGE_REPO + "worker",
     visibility = ["//visibility:public"],
 )

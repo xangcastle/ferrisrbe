@@ -1,32 +1,37 @@
+//! Bounded pool of local worker slots.
+//!
+//! Slots are created on demand up to [`PoolConfig::max_workers`]; a caller
+//! that finds none free waits up to [`PoolConfig::worker_timeout`]. A slot
+//! whose execution fails is retired instead of being returned to the pool.
+
 use super::{ActionResult, WorkerError, WorkerId, WorkerState};
 use crate::execution::scheduler::ExecutableAction;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
+/// Interval at which a waiting [`WorkerPool::acquire_worker`] rechecks.
+const ACQUIRE_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Idle and busy worker slots.
 pub struct WorkerPool {
     config: PoolConfig,
-
     available: Arc<Mutex<Vec<WorkerHandle>>>,
-
     busy: Arc<RwLock<std::collections::HashMap<WorkerId, WorkerHandle>>>,
-
     pending: Arc<Mutex<VecDeque<ExecutableAction>>>,
-
-    completion_tx: mpsc::Sender<(WorkerId, Result<ActionResult, WorkerError>)>,
-    completion_rx: Arc<Mutex<mpsc::Receiver<(WorkerId, Result<ActionResult, WorkerError>)>>>,
 }
 
+/// Sizing and timeouts of a [`WorkerPool`].
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
+    /// Most slots the pool will ever hold.
     pub max_workers: usize,
-
+    /// Slots created by [`WorkerPool::initialize`].
     pub min_workers: usize,
-
     pub idle_timeout: Duration,
-
+    /// Longest [`WorkerPool::acquire_worker`] waits for a free slot.
     pub worker_timeout: Duration,
 }
 
@@ -41,6 +46,7 @@ impl Default for PoolConfig {
     }
 }
 
+/// One worker slot.
 #[derive(Debug, Clone)]
 pub struct WorkerHandle {
     pub id: WorkerId,
@@ -51,18 +57,15 @@ pub struct WorkerHandle {
 
 impl WorkerPool {
     pub fn new(config: PoolConfig) -> Self {
-        let (completion_tx, completion_rx) = mpsc::channel(100);
-
         Self {
             config,
             available: Arc::new(Mutex::new(Vec::new())),
             busy: Arc::new(RwLock::new(std::collections::HashMap::new())),
             pending: Arc::new(Mutex::new(VecDeque::new())),
-            completion_tx,
-            completion_rx: Arc::new(Mutex::new(completion_rx)),
         }
     }
 
+    /// Creates the [`PoolConfig::min_workers`] initial slots.
     pub async fn initialize(&self) -> Result<(), WorkerError> {
         info!(
             "Initializing worker pool with {} workers",
@@ -90,6 +93,20 @@ impl WorkerPool {
         })
     }
 
+    /// Moves `worker` to the busy set and returns it marked `Busy`.
+    async fn mark_busy(&self, mut worker: WorkerHandle) -> WorkerHandle {
+        worker.status = WorkerState::Busy;
+        self.busy.write().await.insert(worker.id, worker.clone());
+        worker
+    }
+
+    /// Takes a free slot, creating one while below
+    /// [`PoolConfig::max_workers`], and waits for one otherwise.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkerError::Unavailable`] when no slot frees up within
+    /// [`PoolConfig::worker_timeout`].
     pub async fn acquire_worker(&self) -> Result<WorkerHandle, WorkerError> {
         let deadline = Instant::now() + self.config.worker_timeout;
 
@@ -97,10 +114,7 @@ impl WorkerPool {
             {
                 let mut available = self.available.lock().await;
                 if let Some(worker) = available.pop() {
-                    let mut busy = self.busy.write().await;
-                    let mut worker = worker;
-                    worker.status = WorkerState::Busy;
-                    busy.insert(worker.id, worker.clone());
+                    let worker = self.mark_busy(worker).await;
                     debug!("Acquired worker {:?}", worker.id);
                     return Ok(worker);
                 }
@@ -114,13 +128,7 @@ impl WorkerPool {
 
             if current_count < self.config.max_workers {
                 match self.create_worker().await {
-                    Ok(worker) => {
-                        let mut busy = self.busy.write().await;
-                        let mut worker = worker;
-                        worker.status = WorkerState::Busy;
-                        busy.insert(worker.id, worker.clone());
-                        return Ok(worker);
-                    }
+                    Ok(worker) => return Ok(self.mark_busy(worker).await),
                     Err(e) => {
                         warn!("Failed to create worker: {}", e);
                     }
@@ -134,10 +142,11 @@ impl WorkerPool {
                 )));
             }
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(ACQUIRE_RETRY_INTERVAL).await;
         }
     }
 
+    /// Returns a slot to the pool when `healthy`, and retires it otherwise.
     pub async fn release_worker(&self, worker_id: WorkerId, healthy: bool) {
         let worker_to_release = {
             let mut busy = self.busy.write().await;
@@ -161,6 +170,7 @@ impl WorkerPool {
         }
     }
 
+    /// Runs `action` on a slot; a failed execution retires the slot.
     pub async fn execute(&self, action: ExecutableAction) -> Result<ActionResult, WorkerError> {
         let worker = self.acquire_worker().await?;
         let worker_id = worker.id;
@@ -203,6 +213,7 @@ impl WorkerPool {
         }
     }
 
+    /// Drops every slot and pending action.
     pub async fn shutdown(&self) {
         info!("Shutting down worker pool");
 
@@ -219,6 +230,7 @@ impl WorkerPool {
     }
 }
 
+/// Slot and queue counts at one instant.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct PoolStats {
@@ -239,7 +251,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_pool_initialization() {
+    async fn initialize_creates_min_workers() {
         let pool = WorkerPool::new(PoolConfig {
             min_workers: 2,
             max_workers: 5,
@@ -254,7 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_worker_acquisition() {
+    async fn acquired_worker_is_busy_until_released() {
         let pool = WorkerPool::new(PoolConfig {
             min_workers: 1,
             max_workers: 2,

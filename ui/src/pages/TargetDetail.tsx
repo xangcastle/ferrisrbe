@@ -1,213 +1,399 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { getTargetHistory } from '../api/bes';
-import StatusBadge from '../components/StatusBadge';
-import type { TargetExecution } from '../types';
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  ArrowLeftIcon,
+  CheckCircle2Icon,
+  DatabaseIcon,
+  HistoryIcon,
+  LockIcon,
+  RepeatIcon,
+  TargetIcon,
+} from "lucide-react";
+import { cn } from "cn";
+import { getTargetHistory } from "@/api/bes";
+import StatusBadge from "@/components/StatusBadge";
+import TargetInputs from "@/components/TargetInputs";
+import TargetTimeline from "@/components/TargetTimeline";
+import { EmptyState, PageHeader, Stat } from "@/components/page";
+import { formatDuration, formatPercent, timeAgo } from "@/lib/format";
+import type { TargetExecution } from "@/types";
+import { Badge } from "@/shadcn/ui/badge";
+import { Button } from "@/shadcn/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/shadcn/ui/card";
+import { Skeleton } from "@/shadcn/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/shadcn/ui/table";
 
-function formatTime(iso?: string) {
-  if (!iso) return '-';
-  return new Date(iso).toLocaleString();
+const TIMELINE_RUNS = 40;
+
+/**
+ * One execution per build. Older records list a target once per
+ * configuration and per aspect applied to it; those are folded into the
+ * first, failed if any of them failed.
+ */
+function oncePerBuild(history: TargetExecution[]) {
+  const byBuild = new Map<string, TargetExecution>();
+  for (const ex of history) {
+    const seen = byBuild.get(ex.invocation_id);
+    if (!seen) byBuild.set(ex.invocation_id, ex);
+    else if (ex.status === "failure" && seen.status !== "failure")
+      byBuild.set(ex.invocation_id, { ...seen, status: "failure" });
+  }
+  return [...byBuild.values()];
 }
 
-function formatDuration(ms?: number) {
-  if (ms === undefined || ms === null) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+function barColor(status: string) {
+  if (status === "failure") return "bg-destructive";
+  if (status === "cached") return "bg-chart-2";
+  return "bg-success";
 }
 
-function BuildTimeline({ history }: { history: TargetExecution[] }) {
-  const maxDuration = useMemo(() => {
-    return Math.max(...history.map((h) => h.action_duration_ms || h.build_duration_ms), 1);
-  }, [history]);
-
+/**
+ * The latest runs as vertical bars, oldest on the left: action time when
+ * Bazel reported the target's actions, otherwise how many of its actions
+ * the ActionCache could not serve.
+ */
+function RunChart({
+  runs,
+  value,
+  format,
+}: {
+  runs: TargetExecution[];
+  value: (ex: TargetExecution) => number;
+  format: (n: number) => string;
+}) {
+  const navigate = useNavigate();
+  const max = Math.max(...runs.map(value), 1);
   return (
-    <div className="space-y-2">
-      {history.map((ex, idx) => {
-        const duration = ex.action_duration_ms || ex.build_duration_ms;
-        const widthPercent = maxDuration > 0 ? (duration / maxDuration) * 100 : 0;
-        return (
-          <div key={idx} className="flex items-center gap-3 text-sm">
-            <Link
-              to={`/builds/${encodeURIComponent(ex.invocation_id)}`}
-              className="w-48 shrink-0 truncate text-blue-600 hover:text-blue-800"
-              title={ex.invocation_id}
-            >
-              {ex.invocation_id.slice(0, 8)}...
-            </Link>
-            <div className="flex-1">
-              <div className="h-5 rounded bg-gray-100">
-                <div
-                  className={`h-5 rounded ${
-                    ex.status === 'failure' ? 'bg-red-500' : ex.status === 'cached' ? 'bg-blue-500' : 'bg-green-500'
-                  }`}
-                  style={{ width: `${Math.max(widthPercent, 2)}%` }}
-                  title={`${formatDuration(duration)}`}
-                />
-              </div>
-            </div>
-            <span className="w-20 shrink-0 text-right text-gray-700">{formatDuration(duration)}</span>
-          </div>
-        );
-      })}
+    <div className="flex h-40 items-end gap-1">
+      {runs.map((ex) => (
+        <button
+          key={ex.invocation_id}
+          type="button"
+          title={`${format(value(ex))} · ${ex.status} · ${new Date(ex.build_start_time ?? "").toLocaleString()}`}
+          onClick={() =>
+            navigate(`/builds/${encodeURIComponent(ex.invocation_id)}`)
+          }
+          className="group flex h-full max-w-12 flex-1 items-end"
+        >
+          <span
+            className={cn(
+              "w-full rounded-t-sm opacity-80 transition-opacity group-hover:opacity-100",
+              value(ex) === 0 ? "bg-muted-foreground/30" : barColor(ex.status),
+            )}
+            style={{ height: `${Math.max((value(ex) / max) * 100, 3)}%` }}
+          />
+        </button>
+      ))}
     </div>
   );
 }
 
 export default function TargetDetail() {
-  const { label } = useParams<{ label: string }>();
-  const [history, setHistory] = useState<TargetExecution[]>([]);
+  const { label = "" } = useParams<{ label: string }>();
+  const [raw, setRaw] = useState<TargetExecution[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function load() {
-      if (!label) return;
-      try {
-        setLoading(true);
-        const data = await getTargetHistory(label);
-        setHistory(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load target history');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+    let cancelled = false;
+    setLoading(true);
+    getTargetHistory(label)
+      .then((data) => !cancelled && setRaw(data))
+      .catch(
+        (err) =>
+          !cancelled &&
+          setError(
+            err instanceof Error ? err.message : "Failed to load history",
+          ),
+      )
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, [label]);
 
-  const latestEnvVars = useMemo(() => {
-    return history[history.length - 1]?.env_vars ?? {};
+  const history = useMemo(() => oncePerBuild(raw), [raw]);
+
+  const summary = useMemo(() => {
+    const failures = history.filter((h) => h.status === "failure").length;
+    const hits = history.reduce((s, h) => s + (h.cache_hits ?? 0), 0);
+    const misses = history.reduce((s, h) => s + (h.cache_misses ?? 0), 0);
+    return {
+      passRate: history.length ? 1 - failures / history.length : null,
+      hitRate: hits + misses === 0 ? null : hits / (hits + misses),
+      timed: history.some((h) => h.action_duration_ms > 0),
+      counted: history.some((h) => h.action_count > 0),
+      latest: history[history.length - 1],
+    };
   }, [history]);
 
-  if (loading) return <p className="text-gray-600">Loading target history...</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  const runs = history.slice(-TIMELINE_RUNS);
+  const latestInputs = [...history].reverse().find((h) => h.heaviest_inputs);
+  const env = Object.entries(summary.latest?.env_vars ?? {}).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Target History</h2>
-          <p className="text-sm text-gray-500 break-all">{label}</p>
-        </div>
-        <Link to="/targets" className="text-sm font-medium text-blue-600 hover:text-blue-800">
-          &larr; Back to targets
-        </Link>
-      </div>
+      <PageHeader
+        icon={TargetIcon}
+        title={<span className="font-mono text-xl">{label}</span>}
+        description={
+          summary.latest?.target_kind
+            ? `${summary.latest.target_kind} · history across retained builds`
+            : "History across retained builds"
+        }
+      >
+        <Button variant="outline" size="sm" asChild>
+          <Link to="/targets">
+            <ArrowLeftIcon /> Targets
+          </Link>
+        </Button>
+      </PageHeader>
 
-      <div className="rounded-lg border bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-lg font-semibold text-gray-900">Build Duration Timeline</h3>
-        {history.length === 0 ? (
-          <p className="text-gray-500">No history available.</p>
-        ) : (
-          <BuildTimeline history={history} />
-        )}
-        <p className="mt-3 text-xs text-gray-500">
-          Bars show action duration when available; otherwise full build duration. Use{' '}
-          <code className="rounded bg-gray-100 px-1 py-0.5">--build_event_publish_all_actions=true</code>{' '}
-          for action-level timing.
-        </p>
-      </div>
-
-      <div className="overflow-hidden rounded-lg border bg-white shadow-sm">
-        <div className="border-b px-4 py-3">
-          <h3 className="text-lg font-semibold text-gray-900">Execution History</h3>
-        </div>
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Build
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Status
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Actions
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Cached
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Failed
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Action Duration
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Build Duration
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Build Time
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {history.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
-                  No history for this target.
-                </td>
-              </tr>
-            )}
-            {history.map((ex, idx) => (
-              <tr key={idx} className="hover:bg-gray-50">
-                <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                  <Link
-                    to={`/builds/${encodeURIComponent(ex.invocation_id)}`}
-                    className="text-blue-600 hover:text-blue-800"
-                  >
-                    {ex.invocation_id.slice(0, 16)}...
-                  </Link>
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm">
-                  <StatusBadge status={ex.status} />
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{ex.action_count}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{ex.cached_actions}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{ex.failed_actions}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {formatDuration(ex.action_duration_ms)}
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {formatDuration(ex.build_duration_ms)}
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {formatTime(ex.build_start_time)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {Object.keys(latestEnvVars).length > 0 && (
-        <div className="rounded-lg border bg-white p-5 shadow-sm">
-          <h3 className="mb-3 text-lg font-semibold text-gray-900">
-            Environment Variables (latest build)
-          </h3>
-          <div className="max-h-64 overflow-auto rounded border">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Variable
-                  </th>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Value
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {Object.entries(latestEnvVars).map(([key, value]) => (
-                  <tr key={key}>
-                    <td className="px-4 py-2 text-sm font-medium text-gray-900">{key}</td>
-                    <td className="px-4 py-2 text-sm text-gray-700 break-all font-mono">{value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {loading ? (
+        <Skeleton className="h-72 rounded-xl" />
+      ) : error ? (
+        <p className="text-sm text-destructive">{error}</p>
+      ) : history.length === 0 ? (
+        <Card>
+          <EmptyState icon={HistoryIcon} title="No history for this target">
+            It shows up once a finished build reports it.
+          </EmptyState>
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Stat
+              icon={RepeatIcon}
+              label="Builds"
+              value={history.length.toLocaleString()}
+            />
+            <Stat
+              icon={CheckCircle2Icon}
+              label="Pass rate"
+              value={formatPercent(summary.passRate)}
+            />
+            <Stat
+              icon={DatabaseIcon}
+              label="Action cache hit rate"
+              value={formatPercent(summary.hitRate)}
+            />
+            <Stat
+              icon={HistoryIcon}
+              label="Last run"
+              value={timeAgo(summary.latest?.build_start_time)}
+            />
           </div>
-        </div>
+
+          <Card className="gap-4">
+            <CardHeader>
+              <CardTitle>
+                {summary.timed
+                  ? "Action time per build"
+                  : "Executed actions per build"}
+              </CardTitle>
+              <CardDescription>
+                {summary.timed
+                  ? "Wall time of this target's actions"
+                  : "Actions of this target the ActionCache could not serve, so they ran"}
+                , over the last {runs.length} builds. Click a bar to open its
+                build.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {summary.timed ? (
+                <RunChart
+                  runs={runs}
+                  value={(ex) => ex.action_duration_ms}
+                  format={formatDuration}
+                />
+              ) : (
+                <RunChart
+                  runs={runs}
+                  value={(ex) => ex.cache_misses ?? 0}
+                  format={(n) => `${n.toLocaleString()} executed`}
+                />
+              )}
+              <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
+                {[
+                  ["bg-success", "passed"],
+                  ["bg-destructive", "failed"],
+                  ["bg-muted-foreground/30", "fully cached"],
+                ].map(([color, name]) => (
+                  <span key={name} className="inline-flex items-center gap-1.5">
+                    <span className={cn("size-2 rounded-full", color)} />
+                    {name}
+                  </span>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {latestInputs && (
+            <TargetInputs
+              inputs={latestInputs.heaviest_inputs!}
+              invocationId={latestInputs.invocation_id}
+            />
+          )}
+
+          {summary.latest && (
+            <TargetTimeline
+              label={label}
+              invocationId={summary.latest.invocation_id}
+            />
+          )}
+
+          <Card className="gap-0 pb-0">
+            <CardHeader className="pb-4">
+              <CardTitle>Executions</CardTitle>
+              <CardDescription>
+                One per build, newest first.
+                {!summary.counted &&
+                  " Per-action counts need --build_event_publish_all_actions; the cache columns come from this server's ActionCache."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="px-0">
+              <div className="max-h-[32rem] overflow-auto border-t">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-card">
+                    <TableRow>
+                      <TableHead className="pl-6">Build</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Cache hits</TableHead>
+                      <TableHead className="text-right">Executed</TableHead>
+                      <TableHead>Executed mnemonics</TableHead>
+                      {summary.counted && (
+                        <TableHead className="text-right">Failed</TableHead>
+                      )}
+                      {summary.timed && (
+                        <TableHead className="text-right">
+                          Action time
+                        </TableHead>
+                      )}
+                      <TableHead className="text-right">Build time</TableHead>
+                      <TableHead className="pr-6 text-right">Started</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {[...history].reverse().map((ex) => (
+                      <TableRow key={ex.invocation_id}>
+                        <TableCell className="pl-6">
+                          <Link
+                            to={`/builds/${encodeURIComponent(ex.invocation_id)}`}
+                            className="font-mono text-xs hover:text-primary"
+                          >
+                            {ex.invocation_id.slice(0, 13)}…
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge status={ex.status} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {(ex.cache_hits ?? 0).toLocaleString()}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            "text-right tabular-nums",
+                            (ex.cache_misses ?? 0) > 0 && "font-semibold",
+                          )}
+                        >
+                          {(ex.cache_misses ?? 0).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="max-w-xs">
+                          <div className="flex flex-wrap gap-1">
+                            {Object.entries(ex.missed_mnemonics ?? {})
+                              .sort((a, b) => b[1] - a[1])
+                              .slice(0, 3)
+                              .map(([mnemonic, n]) => (
+                                <Badge
+                                  key={mnemonic}
+                                  variant="secondary"
+                                  className="font-mono"
+                                >
+                                  {mnemonic}
+                                  {n > 1 && ` ×${n}`}
+                                </Badge>
+                              ))}
+                          </div>
+                        </TableCell>
+                        {summary.counted && (
+                          <TableCell
+                            className={cn(
+                              "text-right tabular-nums",
+                              ex.failed_actions > 0 && "text-destructive",
+                            )}
+                          >
+                            {ex.failed_actions.toLocaleString()}
+                          </TableCell>
+                        )}
+                        {summary.timed && (
+                          <TableCell className="text-right tabular-nums">
+                            {formatDuration(ex.action_duration_ms)}
+                          </TableCell>
+                        )}
+                        <TableCell className="text-right text-muted-foreground tabular-nums">
+                          {formatDuration(ex.build_duration_ms)}
+                        </TableCell>
+                        <TableCell className="pr-6 text-right text-muted-foreground">
+                          {timeAgo(ex.build_start_time)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {env.length > 0 && (
+            <Card className="gap-0 pb-0">
+              <CardHeader className="pb-4">
+                <CardTitle>Action environment</CardTitle>
+                <CardDescription>
+                  As of the latest build; secret values arrive redacted.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="px-0">
+                <div className="max-h-80 overflow-auto border-t">
+                  <Table>
+                    <TableBody>
+                      {env.map(([key, value]) => (
+                        <TableRow key={key}>
+                          <TableCell className="w-1/3 pl-6 font-mono text-xs">
+                            {key}
+                          </TableCell>
+                          <TableCell className="pr-6 font-mono text-xs break-all whitespace-normal">
+                            {value === "<redacted>" ? (
+                              <Badge variant="outline" className="gap-1">
+                                <LockIcon className="size-3" /> redacted
+                              </Badge>
+                            ) : (
+                              value
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
     </div>
   );

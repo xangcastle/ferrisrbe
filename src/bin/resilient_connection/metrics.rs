@@ -1,7 +1,12 @@
+//! Counters of the worker connection's history.
+
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-/// Connection metrics for observability and debugging
+/// Connection durations kept for [`ConnectionMetrics::average_connection_duration_secs`].
+const DURATION_HISTORY_LEN: usize = 100;
+
+/// Connection counters. When disabled every `record_*` call is a no-op.
 pub struct ConnectionMetrics {
     pub enabled: bool,
     pub total_connections_established: u64,
@@ -20,11 +25,13 @@ impl ConnectionMetrics {
             total_reconnections: 0,
             total_disconnections: 0,
             failed_health_checks: 0,
-            connection_durations: VecDeque::with_capacity(100),
+            connection_durations: VecDeque::with_capacity(DURATION_HISTORY_LEN),
             last_connection_time: None,
         }
     }
 
+    /// Counts a connection; every one after the first also counts as a
+    /// reconnection.
     pub fn record_connection_established(&mut self) {
         if !self.enabled {
             return;
@@ -39,6 +46,7 @@ impl ConnectionMetrics {
         self.last_connection_time = Some(Instant::now());
     }
 
+    /// Counts a disconnection and records how long the connection lasted.
     pub fn record_disconnection(&mut self) {
         if !self.enabled {
             return;
@@ -50,7 +58,7 @@ impl ConnectionMetrics {
             let duration = Instant::now().duration_since(start);
             self.connection_durations.push_back(duration);
 
-            if self.connection_durations.len() > 100 {
+            if self.connection_durations.len() > DURATION_HISTORY_LEN {
                 self.connection_durations.pop_front();
             }
         }
@@ -64,6 +72,8 @@ impl ConnectionMetrics {
         self.failed_health_checks += 1;
     }
 
+    /// Mean duration of the recent connections, in seconds; zero when none
+    /// has ended.
     pub fn average_connection_duration_secs(&self) -> f64 {
         if self.connection_durations.is_empty() {
             return 0.0;

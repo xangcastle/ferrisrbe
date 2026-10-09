@@ -1,106 +1,187 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getBuilds } from '../api/bes';
-import StatusBadge from '../components/StatusBadge';
-import type { BuildSummary } from '../types';
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { HammerIcon, InboxIcon, Loader2Icon } from "lucide-react";
+import { useLiveBuilds } from "@/hooks/useLive";
+import StatusBadge from "@/components/StatusBadge";
+import { BuildOrigin, invocationTitle } from "@/components/BuildMeta";
+import { EmptyState, PageHeader, SearchInput } from "@/components/page";
+import {
+  cacheHitRatio,
+  formatDuration,
+  formatPercent,
+  timeAgo,
+} from "@/lib/format";
+import type { BuildStatus } from "@/types";
+import { Button } from "@/shadcn/ui/button";
+import { Card, CardContent } from "@/shadcn/ui/card";
+import { Skeleton } from "@/shadcn/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/shadcn/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/shadcn/ui/tabs";
 
-function formatDuration(ms?: number) {
-  if (ms === undefined || ms === null) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+type Filter = "all" | BuildStatus;
 
-function cacheHitRatio(build: BuildSummary) {
-  if (build.total_actions === 0) return '0%';
-  return `${Math.round((build.cached_actions / build.total_actions) * 100)}%`;
-}
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "in_progress", label: "Running" },
+  { key: "success", label: "Passed" },
+  { key: "failure", label: "Failed" },
+  { key: "interrupted", label: "Interrupted" },
+];
 
 export default function Builds() {
-  const [builds, setBuilds] = useState<BuildSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { builds, total, hasMore, loadMore, loadingMore, loading, error } =
+    useLiveBuilds(50);
   const navigate = useNavigate();
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    async function load() {
-      try {
-        setLoading(true);
-        const data = await getBuilds();
-        setBuilds(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load builds');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+  const counts = useMemo(() => {
+    const byStatus: Record<string, number> = { all: builds.length };
+    for (const b of builds) byStatus[b.status] = (byStatus[b.status] ?? 0) + 1;
+    return byStatus;
+  }, [builds]);
 
-  if (loading) return <p className="text-gray-600">Loading builds...</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return builds.filter(
+      (b) =>
+        (filter === "all" || b.status === filter) &&
+        (!q ||
+          b.invocation_id.toLowerCase().includes(q) ||
+          invocationTitle(b).toLowerCase().includes(q) ||
+          Object.values(b.metadata ?? {}).some((v) =>
+            v.toLowerCase().includes(q),
+          )),
+    );
+  }, [builds, filter, query]);
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-2xl font-bold text-gray-900">Builds</h2>
-      <div className="overflow-hidden rounded-lg border bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Invocation ID
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Command
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Status
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Duration
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Actions
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Cache Hit Ratio
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {builds.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-gray-500">
-                  No builds found.
-                </td>
-              </tr>
-            )}
-            {builds.map((build) => (
-              <tr
-                key={build.invocation_id}
-                onClick={() => navigate(`/builds/${encodeURIComponent(build.invocation_id)}`)}
-                className="cursor-pointer hover:bg-gray-50"
-              >
-                <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">
-                  {build.invocation_id}
-                </td>
-                <td className="px-4 py-3 text-sm text-gray-700">{build.command}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm">
-                  <StatusBadge status={build.status} />
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {formatDuration(build.duration_ms)}
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {build.total_actions}
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {cacheHitRatio(build)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        icon={HammerIcon}
+        title="Builds"
+        description={`Every invocation that streamed to this BES · ${total.toLocaleString()} retained`}
+      />
+
+      <Card className="gap-0 py-0">
+        <div className="flex flex-col gap-3 border-b px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
+            <TabsList>
+              {FILTERS.map(({ key, label }) => (
+                <TabsTrigger key={key} value={key}>
+                  {label}
+                  <span className="text-muted-foreground tabular-nums">
+                    {counts[key] ?? 0}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            placeholder="Invocation, pattern, user, branch…"
+            className="lg:w-80"
+          />
+        </div>
+        <CardContent className="px-0">
+          {loading ? (
+            <div className="space-y-2 p-6">
+              {Array.from({ length: 8 }, (_, i) => (
+                <Skeleton key={i} className="h-10" />
+              ))}
+            </div>
+          ) : error ? (
+            <p className="px-6 py-6 text-sm text-destructive">{error}</p>
+          ) : visible.length === 0 ? (
+            <EmptyState icon={InboxIcon} title="No builds here">
+              {builds.length === 0
+                ? "Point Bazel at this server with --bes_backend and builds show up live."
+                : "Nothing in the loaded builds matches this filter."}
+            </EmptyState>
+          ) : (
+            <Table>
+              <TableHeader className="bg-muted/40">
+                <TableRow>
+                  <TableHead className="pl-6">Status</TableHead>
+                  <TableHead>Invocation</TableHead>
+                  <TableHead>Origin</TableHead>
+                  <TableHead className="text-right">Duration</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-right">Cache hits</TableHead>
+                  <TableHead className="pr-6 text-right">Started</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((build) => (
+                  <TableRow
+                    key={build.invocation_id}
+                    className="cursor-pointer"
+                    onClick={() =>
+                      navigate(
+                        `/builds/${encodeURIComponent(build.invocation_id)}`,
+                      )
+                    }
+                  >
+                    <TableCell className="pl-6">
+                      <StatusBadge status={build.status} />
+                    </TableCell>
+                    <TableCell className="max-w-sm">
+                      <div className="truncate font-medium">
+                        {invocationTitle(build)}
+                      </div>
+                      <div className="truncate font-mono text-xs text-muted-foreground">
+                        {build.invocation_id}
+                      </div>
+                    </TableCell>
+                    <TableCell className="max-w-xs truncate text-sm">
+                      <BuildOrigin build={build} />
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {build.status === "in_progress"
+                        ? "–"
+                        : formatDuration(build.duration_ms)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {build.total_actions.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatPercent(cacheHitRatio(build))}
+                    </TableCell>
+                    <TableCell className="pr-6 text-right text-muted-foreground">
+                      {timeAgo(build.start_time)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+        {hasMore && !loading && (
+          <div className="flex items-center justify-between border-t px-6 py-3 text-sm text-muted-foreground">
+            <span className="tabular-nums">
+              {builds.length.toLocaleString()} of {total.toLocaleString()}{" "}
+              loaded
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore && <Loader2Icon className="animate-spin" />}
+              Load more
+            </Button>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

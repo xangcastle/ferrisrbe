@@ -1,92 +1,176 @@
-//! BES (Build Event Service) configuration.
+//! BES (Build Event Service) configuration and on-disk layout.
+//!
+//! Every path the BES store reads or writes is derived here from
+//! [`BesConfig::data_dir`]:
+//!
+//! ```text
+//! <data_dir>/
+//!   <invocation_id>/{events.jsonl, summary.json, targets.jsonl}
+//!   targets.jsonl, tests.jsonl          global execution histories
+//!   by-label/{targets,tests}/<sha256>.jsonl
+//!   by-label/.complete                  per-label index sentinel
+//! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Name of [`BesConfig::label_dir`] under the data directory.
+const LABEL_DIR_NAME: &str = "by-label";
 
 /// Configuration for the BES backend.
 #[derive(Debug, Clone)]
 pub struct BesConfig {
-    /// gRPC port for the PublishBuildEvent service.
-    pub grpc_port: u16,
-    /// HTTP port for the BES UI/API.
-    pub ui_port: u16,
-    /// Address to bind both gRPC and HTTP servers to.
-    pub bind_address: String,
-    /// Directory where invocation data is persisted.
+    /// Root of the BES store.
     pub data_dir: PathBuf,
-    /// Maximum retention time for build data, in days.
+    /// Age after which the maintenance task deletes a finished build and
+    /// compacts it out of the histories. `None` retains every build.
+    /// Never `Some(0)`.
     pub max_retention_days: Option<u32>,
-    /// Directory from which static UI files are served.
-    pub static_dir: PathBuf,
 }
 
 impl BesConfig {
-    /// Load configuration from environment variables.
+    /// Reads `RBE_BES_DATA_DIR` (default `/data/bes`) and
+    /// `RBE_BES_MAX_RETENTION_DAYS`; a missing, unparsable or zero retention
+    /// disables it.
     pub fn from_env() -> Self {
-        let grpc_port = std::env::var("RBE_BES_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(9095);
-        let ui_port = std::env::var("RBE_BES_UI_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(9096);
-        let bind_address =
-            std::env::var("RBE_BES_BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
         let data_dir = std::env::var("RBE_BES_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/data/bes"));
         let max_retention_days = std::env::var("RBE_BES_MAX_RETENTION_DAYS")
             .ok()
-            .and_then(|s| s.parse().ok());
-        let static_dir = std::env::var("RBE_BES_STATIC_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("ui/dist"));
-
+            .and_then(|s| s.parse().ok())
+            .filter(|days| *days > 0);
         Self {
-            grpc_port,
-            ui_port,
-            bind_address,
             data_dir,
             max_retention_days,
-            static_dir,
         }
     }
 
-    /// Directory for a specific invocation.
+    /// Directory holding everything recorded for one invocation. Callers
+    /// pass an id accepted by [`is_invocation_id`], which every entry point
+    /// (BES stream, REST API, MCP) checks.
     pub fn invocation_dir(&self, invocation_id: &str) -> PathBuf {
         self.data_dir.join(invocation_id)
     }
 
-    /// Path to the events JSONL file for an invocation.
+    /// Raw build events of one invocation, one JSON object per line.
     pub fn events_path(&self, invocation_id: &str) -> PathBuf {
         self.invocation_dir(invocation_id).join("events.jsonl")
     }
 
-    /// Path to the summary JSON file for an invocation.
+    /// Derived summary of one invocation.
     pub fn summary_path(&self, invocation_id: &str) -> PathBuf {
         self.invocation_dir(invocation_id).join("summary.json")
     }
 
-    /// Path to the target execution history JSONL file.
+    /// Target executions of one invocation, one record per line.
+    pub fn invocation_targets_path(&self, invocation_id: &str) -> PathBuf {
+        self.invocation_dir(invocation_id).join("targets.jsonl")
+    }
+
+    /// Target executions of every retained invocation.
     pub fn targets_path(&self) -> PathBuf {
         self.data_dir.join("targets.jsonl")
     }
 
-    /// Path to the test execution history JSONL file.
+    /// Test executions of every retained invocation.
     pub fn tests_path(&self) -> PathBuf {
         self.data_dir.join("tests.jsonl")
     }
+
+    /// Whether `path`, an entry of `data_dir`, is an invocation directory.
+    /// Every directory there is one, except [`Self::label_dir`].
+    pub fn is_invocation_dir(&self, path: &Path) -> bool {
+        path.is_dir() && path != self.label_dir()
+    }
+
+    /// Root of the per-label histories: one JSONL per target or test label.
+    pub fn label_dir(&self) -> PathBuf {
+        self.data_dir.join(LABEL_DIR_NAME)
+    }
+
+    /// Per-label histories of targets.
+    pub fn target_labels_dir(&self) -> PathBuf {
+        self.label_dir().join("targets")
+    }
+
+    /// Per-label histories of tests.
+    pub fn test_labels_dir(&self) -> PathBuf {
+        self.label_dir().join("tests")
+    }
+
+    /// Present once the per-label histories cover every record of the global
+    /// histories; until then label lookups read the global files.
+    pub fn label_index_sentinel(&self) -> PathBuf {
+        self.label_dir().join(".complete")
+    }
+
+    /// History of one target label.
+    pub fn target_label_path(&self, label: &str) -> PathBuf {
+        self.target_labels_dir().join(label_file_name(label))
+    }
+
+    /// History of one test label.
+    pub fn test_label_path(&self, label: &str) -> PathBuf {
+        self.test_labels_dir().join(label_file_name(label))
+    }
+}
+
+/// Longest accepted invocation id; Bazel's are 36-character UUIDs.
+const MAX_INVOCATION_ID_LEN: usize = 64;
+
+/// Whether `id` can name an invocation directory: 1 to
+/// [`MAX_INVOCATION_ID_LEN`] ASCII letters, digits, `-` or `_`, and not the
+/// name of [`BesConfig::label_dir`]. Anything else (`/`, `..`, an absolute
+/// path) would resolve outside `<data_dir>/<id>`.
+pub fn is_invocation_id(id: &str) -> bool {
+    (1..=MAX_INVOCATION_ID_LEN).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id != LABEL_DIR_NAME
+}
+
+/// File name of a label's history: the hex SHA-256 of the label, since
+/// labels carry `/`, `:` and `@` and have no length bound.
+pub fn label_file_name(label: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}.jsonl", Sha256::digest(label.as_bytes()))
 }
 
 impl Default for BesConfig {
     fn default() -> Self {
         Self {
-            grpc_port: 9095,
-            ui_port: 9096,
-            bind_address: "0.0.0.0".to_string(),
             data_dir: PathBuf::from("/data/bes"),
             max_retention_days: None,
-            static_dir: PathBuf::from("ui/dist"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bazel_invocation_ids_are_accepted() {
+        assert!(is_invocation_id("1e0bb3be-e2d0-4d2e-ad35-23530d3b40c9"));
+        assert!(is_invocation_id("inv_1"));
+    }
+
+    #[test]
+    fn ids_that_leave_the_invocation_directory_are_refused() {
+        let too_long = "a".repeat(MAX_INVOCATION_ID_LEN + 1);
+        for id in [
+            "",
+            "..",
+            "../etc",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "by-label",
+            "ñ",
+            &too_long,
+        ] {
+            assert!(!is_invocation_id(id), "{id:?}");
         }
     }
 }

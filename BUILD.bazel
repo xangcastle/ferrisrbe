@@ -1,5 +1,17 @@
+load("@aspect_bazel_lib//lib:copy_directory.bzl", "copy_directory")
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc", "rust_library", "rust_test")
+
+exports_files([
+    "clippy.toml",
+    "rustfmt.toml",
+])
+
+alias(
+    name = "format",
+    actual = "//tools/format",
+)
 
 cargo_build_script(
     name = "build_script",
@@ -47,16 +59,27 @@ rust_library(
         "@crates//:crossbeam",
         "@crates//:dashmap",
         "@crates//:fastrand",
+        "@crates//:flate2",
         "@crates//:futures",
         "@crates//:hex",
+        "@crates//:include_dir",
+        "@crates//:jsonwebtoken",
+        "@crates//:libc",
+        "@crates//:mime_guess",
+        "@crates//:moka",
+        "@crates//:object_store",
         "@crates//:once_cell",
         "@crates//:parking_lot",
+        "@crates//:prometheus",
         "@crates//:prost",
         "@crates//:prost-types",
+        "@crates//:reqwest",
+        "@crates//:rmcp",
         "@crates//:serde",
         "@crates//:serde_bytes",
         "@crates//:serde_json",
         "@crates//:sha2",
+        "@crates//:sysinfo",
         "@crates//:thiserror",
         "@crates//:tokio",
         "@crates//:tokio-stream",
@@ -70,47 +93,39 @@ rust_library(
     ],
 )
 
+# The bundle is platform independent; pinning it to the host keeps the OCI
+# platform transitions from rebuilding it against a linux esbuild.
+platform_transition_filegroup(
+    name = "ui_dist_host",
+    srcs = ["//ui:dist"],
+    target_platform = "@platforms//host",
+)
+
+# rules_rust symlinks compile_data that lives in another configuration's
+# output root and cannot do so for a directory; copying puts the tree in
+# this configuration's root.
+copy_directory(
+    name = "ui_dist",
+    src = ":ui_dist_host",
+    out = "ui_dist",
+)
+
 rust_binary(
     name = "server",
-    srcs = glob(
-        ["src/**/*.rs"],
-        exclude = ["src/bin/**"],
-    ),
-    compile_data = [":build_script"],
+    srcs = ["src/main.rs"],
+    compile_data = [":ui_dist"],
     crate_root = "src/main.rs",
     edition = "2021",
-    proc_macro_deps = [
-        "@crates//:async-trait",
-    ],
+    rustc_env = {
+        "RBE_UI_DIST": "$(execpath :ui_dist)",
+    },
     visibility = ["//visibility:public"],
     deps = [
-        ":build_script",
-        "@crates//:ahash",
-        "@crates//:anyhow",
-        "@crates//:async-stream",
-        "@crates//:bytes",
-        "@crates//:chrono",
-        "@crates//:crossbeam",
-        "@crates//:dashmap",
-        "@crates//:fastrand",
-        "@crates//:futures",
-        "@crates//:hex",
-        "@crates//:once_cell",
-        "@crates//:parking_lot",
-        "@crates//:prost",
-        "@crates//:prost-types",
-        "@crates//:serde",
-        "@crates//:serde_bytes",
-        "@crates//:serde_json",
-        "@crates//:sha2",
-        "@crates//:thiserror",
+        ":rbe_lib",
+        "@crates//:include_dir",
         "@crates//:tokio",
-        "@crates//:tokio-stream",
-        "@crates//:tokio-util",
-        "@crates//:tonic",
         "@crates//:tracing",
         "@crates//:tracing-subscriber",
-        "@crates//:uuid",
     ],
 )
 
@@ -156,45 +171,67 @@ rust_binary(
     ],
 )
 
+# The cli target lives in src/cli/, not src/bin/: the worker target globs every
+# src/bin/*.rs into its own sources and would swallow this binary.
 rust_binary(
-    name = "cache",
-    srcs = ["src/bin/cache.rs"],
-    compile_data = [":build_script"],
-    crate_root = "src/bin/cache.rs",
+    name = "cli",
+    srcs = glob(
+        ["src/cli/**/*.rs"],
+    ),
+    crate_root = "src/cli/main.rs",
     edition = "2021",
-    proc_macro_deps = [
-        "@crates//:async-trait",
-    ],
     visibility = ["//visibility:public"],
     deps = [
-        ":build_script",
-        ":rbe_lib",
         "@crates//:anyhow",
+        "@crates//:axum",
+        "@crates//:base64",
+        "@crates//:fastrand",
+        "@crates//:reqwest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
         "@crates//:tokio",
-        "@crates//:tonic",
-        "@crates//:tracing",
-        "@crates//:tracing-subscriber",
     ],
 )
 
-rust_binary(
-    name = "bes",
-    srcs = ["src/bin/bes.rs"],
-    compile_data = [":build_script"],
-    crate_root = "src/bin/bes.rs",
+rust_test(
+    name = "cli_test",
+    crate = ":cli",
     edition = "2021",
-    proc_macro_deps = [
-        "@crates//:async-trait",
-    ],
-    visibility = ["//visibility:public"],
     deps = [
-        ":build_script",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "worker_test",
+    crate = ":worker",
+    edition = "2021",
+)
+
+rust_test(
+    name = "e2e_test",
+    srcs = ["tests/e2e.rs"],
+    data = [
+        ":server",
+        ":worker",
+    ],
+    edition = "2021",
+    env = {
+        "RBE_SERVER_BIN": "$(rootpath :server)",
+        "RBE_WORKER_BIN": "$(rootpath :worker)",
+    },
+    tags = ["requires-network"],
+    deps = [
         ":rbe_lib",
-        "@crates//:anyhow",
+        "@crates//:futures",
+        "@crates//:hex",
+        "@crates//:prost",
+        "@crates//:prost-types",
+        "@crates//:sha2",
+        "@crates//:tempfile",
         "@crates//:tokio",
         "@crates//:tonic",
-        "@crates//:tracing",
-        "@crates//:tracing-subscriber",
     ],
 )
 
@@ -206,6 +243,7 @@ rust_doc(
 
 rust_test(
     name = "rbe_lib_test",
+    compile_data = glob(["src/**/testdata/**"]),
     crate = ":rbe_lib",
     edition = "2021",
     proc_macro_deps = [
@@ -221,16 +259,25 @@ rust_test(
         "@crates//:crossbeam",
         "@crates//:dashmap",
         "@crates//:fastrand",
+        "@crates//:flate2",
         "@crates//:futures",
         "@crates//:hex",
+        "@crates//:include_dir",
+        "@crates//:jsonwebtoken",
+        "@crates//:mime_guess",
+        "@crates//:moka",
         "@crates//:once_cell",
         "@crates//:parking_lot",
+        "@crates//:prometheus",
         "@crates//:prost",
         "@crates//:prost-types",
+        "@crates//:reqwest",
+        "@crates//:rmcp",
         "@crates//:serde",
         "@crates//:serde_bytes",
         "@crates//:serde_json",
         "@crates//:sha2",
+        "@crates//:sysinfo",
         "@crates//:tempfile",
         "@crates//:thiserror",
         "@crates//:tokio",
@@ -246,10 +293,10 @@ rust_test(
 filegroup(
     name = "all",
     srcs = [
-        ":bes",
-        ":cache",
+        ":cli",
         ":server",
         ":worker",
     ],
     visibility = ["//visibility:public"],
 )
+

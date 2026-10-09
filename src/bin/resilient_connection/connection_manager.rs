@@ -1,68 +1,73 @@
+//! Lifecycle of the worker's connection to the scheduler and its
+//! environment-driven configuration.
+
+use std::env;
+use std::fmt::Display;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 
-use super::adaptive_keepalive::AdaptiveKeepalive;
+use super::adaptive_keepalive::{AdaptiveKeepalive, KeepaliveStats};
 use super::connection_state::{ConnectionState, StateMachine};
-#[allow(unused_imports)]
-use super::health_checker::{HealthCheckConfig, HealthChecker};
+use super::env_vars;
 use super::metrics::ConnectionMetrics;
-#[allow(unused_imports)]
-use super::reconnection::{ReconnectionPolicy, ReconnectionStrategy};
-use std::env;
+use super::reconnection::exponential_backoff;
 
-/// Configuration for resilient connection management
+/// Tunables of the worker connection. [`ConfigLoader::load`] fills each one
+/// from its `RBE_*` variable in [`env_vars`], falling back to
+/// [`ConnectionConfig::default`].
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
-    /// Initial keepalive interval in seconds
+    /// HTTP/2 keepalive interval at connection start, in seconds.
     pub initial_keepalive_interval_secs: u64,
-    /// Minimum keepalive interval (most aggressive)
+    /// Shortest interval the adaptive keepalive may shrink to, in seconds.
     pub min_keepalive_interval_secs: u64,
-    /// Maximum keepalive interval (most conservative)
+    /// Longest interval the adaptive keepalive may grow to, in seconds.
     pub max_keepalive_interval_secs: u64,
-    /// Timeout for keepalive responses
+    /// Time allowed for a keepalive response, in seconds.
     pub keepalive_timeout_secs: u64,
-    /// TCP keepalive interval (separate from HTTP/2 keepalive)
+    /// TCP-level keepalive, independent of HTTP/2 keepalive, in seconds.
     pub tcp_keepalive_secs: u64,
-    /// TCP connection timeout
+    /// Time allowed to establish the TCP connection, in seconds.
     pub connection_timeout_secs: u64,
-    /// Maximum reconnection attempts before giving up
+    /// Consecutive reconnection attempts before the worker gives up.
     pub max_reconnect_attempts: u32,
-    /// Base delay for exponential backoff (ms)
+    /// Backoff delay of the first reconnection attempt, in milliseconds.
     pub reconnect_base_delay_ms: u64,
-    /// Maximum delay for exponential backoff (ms)
+    /// Upper bound of the backoff delay, in milliseconds.
     pub reconnect_max_delay_ms: u64,
-    /// Jitter factor (0.0-1.0) for randomizing delays
+    /// Fraction of each backoff delay randomized in either direction, `0.0..=1.0`.
     pub reconnect_jitter_factor: f64,
-    /// Health check interval in seconds
+    /// Interval between application-level health checks, in seconds.
     #[allow(dead_code)]
     pub health_check_interval_secs: u64,
-    /// Health check timeout in seconds
+    /// Time allowed for one health check, in seconds.
     #[allow(dead_code)]
     pub health_check_timeout_secs: u64,
-    /// Timeout for execution handoff during reconnection
+    /// Time allowed to hand in-flight executions over after reconnecting, in seconds.
     #[allow(dead_code)]
     pub execution_handoff_timeout_secs: u64,
-    /// Threshold of consecutive successes before increasing keepalive interval
+    /// Consecutive keepalive successes required before the interval grows.
     pub adaptive_adjustment_threshold: u32,
-    /// Enable metrics collection
+    /// Whether [`ConnectionMetrics`] records anything.
     pub enable_metrics: bool,
 }
 
 impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
-            initial_keepalive_interval_secs: 15,
-            min_keepalive_interval_secs: 5,
+            initial_keepalive_interval_secs: 20,
+            min_keepalive_interval_secs: 10,
             max_keepalive_interval_secs: 60,
-            keepalive_timeout_secs: 10,
+            keepalive_timeout_secs: 15,
             tcp_keepalive_secs: 30,
             connection_timeout_secs: 30,
             max_reconnect_attempts: 10,
             reconnect_base_delay_ms: 100,
-            reconnect_max_delay_ms: 30000,
+            reconnect_max_delay_ms: 30_000,
             reconnect_jitter_factor: 0.25,
             health_check_interval_secs: 5,
             health_check_timeout_secs: 3,
@@ -73,39 +78,47 @@ impl Default for ConnectionConfig {
     }
 }
 
-/// Events that can occur during connection lifecycle
+/// Connection lifecycle notifications, delivered through
+/// [`ConnectionManager::event_receiver`].
 #[derive(Debug)]
 pub enum ConnectionEvent {
-    /// Successfully connected to server
+    /// The stream to the scheduler is established.
     Connected,
-    /// Connection lost, will attempt reconnection
+    /// The stream was lost and a reconnection will follow.
     Disconnected { reason: String },
-    /// Reconnection attempt started
+    /// A reconnection attempt is scheduled after `delay_ms`.
     Reconnecting {
         attempt: u32,
         max_attempts: u32,
         delay_ms: u64,
     },
-    /// Maximum reconnection attempts exceeded
+    /// The connection was lost from a state that does not reconnect.
     Failed { reason: String },
-    /// Health check succeeded
+    /// A health check succeeded with the given round trip.
     #[allow(dead_code)]
     HealthCheckSuccess { rtt_ms: u64 },
-    /// Health check failed
+    /// A health check failed.
     #[allow(dead_code)]
     HealthCheckFailed { reason: String },
-    /// Execution handoff completed (after reconnection)
+    /// In-flight executions were handed over after a reconnection.
     #[allow(dead_code)]
     ExecutionHandoffCompleted { count: usize },
-    /// Network degradation detected
+    /// Keepalive round trips indicate a degraded network.
     #[allow(dead_code)]
     NetworkDegraded { message: String },
-    /// Network recovered
+    /// The network left the degraded state.
     #[allow(dead_code)]
     NetworkRecovered,
 }
 
-/// Manages resilient connection lifecycle for a worker
+/// Connection state, keepalive, metrics and reconnection accounting of one
+/// worker, shared between its work loop and background tasks.
+///
+/// Lock discipline: [`record_connected`](Self::record_connected) and
+/// [`record_disconnected`](Self::record_disconnected) acquire several locks
+/// in the fixed order state machine, metrics, keepalive, reconnect counter.
+/// Every other method holds at most one lock at a time, so no two methods
+/// can wait on each other.
 pub struct ConnectionManager {
     config: ConnectionConfig,
     state_machine: Arc<RwLock<StateMachine>>,
@@ -120,7 +133,6 @@ pub struct ConnectionManager {
 impl ConnectionManager {
     pub fn new(config: ConnectionConfig) -> Self {
         let (event_tx, event_rx) = mpsc::channel(100);
-
         let adaptive_keepalive = AdaptiveKeepalive::new(
             config.initial_keepalive_interval_secs,
             config.min_keepalive_interval_secs,
@@ -129,7 +141,6 @@ impl ConnectionManager {
         );
 
         Self {
-            config: config.clone(),
             state_machine: Arc::new(RwLock::new(StateMachine::new())),
             adaptive_keepalive: Arc::new(RwLock::new(adaptive_keepalive)),
             metrics: Arc::new(RwLock::new(ConnectionMetrics::new(config.enable_metrics))),
@@ -137,26 +148,26 @@ impl ConnectionManager {
             event_rx: Arc::new(RwLock::new(event_rx)),
             current_channel: Arc::new(RwLock::new(None)),
             reconnect_attempts: Arc::new(RwLock::new(0)),
+            config,
         }
     }
 
-    /// Get current connection state
     #[allow(dead_code)]
     pub async fn current_state(&self) -> ConnectionState {
         self.state_machine.read().await.current()
     }
 
-    /// Check if connection is operational
+    /// Whether the connection can accept work assignments.
     pub async fn is_operational(&self) -> bool {
         self.state_machine.read().await.current().is_operational()
     }
 
-    /// Get current keepalive interval
+    /// The keepalive interval currently chosen by the adaptive keepalive.
     pub async fn current_keepalive_interval(&self) -> Duration {
         self.adaptive_keepalive.read().await.current_interval()
     }
 
-    /// Get connection statistics
+    /// A point-in-time snapshot for logs.
     pub async fn stats(&self) -> ConnectionStats {
         let state = self.state_machine.read().await;
         let keepalive = self.adaptive_keepalive.read().await;
@@ -178,12 +189,14 @@ impl ConnectionManager {
         }
     }
 
-    /// Event channel for monitoring connection lifecycle
+    /// The receiving end of the [`ConnectionEvent`] channel. A single
+    /// consumer is expected; it holds the lock for as long as it listens.
     pub fn event_receiver(&self) -> Arc<RwLock<mpsc::Receiver<ConnectionEvent>>> {
         self.event_rx.clone()
     }
 
-    /// Record successful connection establishment
+    /// Marks the connection established over `channel`: resets the
+    /// reconnection counter and the keepalive, and enters `Active`.
     pub async fn record_connected(&self, channel: Channel) {
         let mut state = self.state_machine.write().await;
         let mut metrics = self.metrics.write().await;
@@ -191,146 +204,119 @@ impl ConnectionManager {
         let mut reconnect = self.reconnect_attempts.write().await;
 
         *reconnect = 0;
-
-        // Record connection in metrics
         metrics.record_connection_established();
-
         keepalive.reset(self.config.initial_keepalive_interval_secs);
-
-        // Update state
         state.transition_to(
             ConnectionState::Active,
             Some("Successfully connected to server".to_string()),
         );
-
         *self.current_channel.write().await = Some(channel);
 
-        // Emit event
         let _ = self.event_tx.send(ConnectionEvent::Connected).await;
-
         info!("Connection established and operational");
     }
 
-    /// Record disconnection and initiate reconnection if appropriate
+    /// Marks the connection lost. Enters `Reconnecting` when the current state
+    /// allows reconnection and `Failed` otherwise, emitting the matching event.
     pub async fn record_disconnected(&self, reason: String) {
         let mut state = self.state_machine.write().await;
-        let mut metrics = self.metrics.write().await;
+        self.metrics.write().await.record_disconnection();
 
-        metrics.record_disconnection();
-
-        // Check if we should attempt reconnection
         if state.should_reconnect() {
             state.transition_to(
                 ConnectionState::Reconnecting,
                 Some(format!("Disconnected: {}", reason)),
             );
-
             let _ = self
                 .event_tx
                 .send(ConnectionEvent::Disconnected {
                     reason: reason.clone(),
                 })
                 .await;
-
             info!("Connection lost ({}), initiating reconnection...", reason);
         } else {
             state.transition_to(
                 ConnectionState::Failed,
                 Some(format!("Disconnected permanently: {}", reason)),
             );
-
             let _ = self
                 .event_tx
                 .send(ConnectionEvent::Failed {
                     reason: reason.clone(),
                 })
                 .await;
-
             error!("Connection lost permanently: {}", reason);
         }
 
         *self.current_channel.write().await = None;
     }
 
-    /// Calculate next reconnection delay with exponential backoff and jitter
-    pub async fn next_reconnect_delay(&self) -> Duration {
-        let attempt = *self.reconnect_attempts.read().await;
-
-        let base_delay = self.config.reconnect_base_delay_ms;
-        let max_delay = self.config.reconnect_max_delay_ms;
-
-        let exponential_delay = base_delay * (1_u64 << attempt.min(10));
-        let capped_delay = exponential_delay.min(max_delay);
-
-        let jitter_range = (capped_delay as f64 * self.config.reconnect_jitter_factor) as u64;
-        let jitter = if jitter_range > 0 {
-            let r = fastrand::u64(0..(jitter_range * 2));
-            r as i64 - jitter_range as i64
-        } else {
-            0
+    /// Counts a new reconnection attempt and returns how long to wait before
+    /// it: exponential backoff from `reconnect_base_delay_ms`, doubling per
+    /// previous attempt up to `reconnect_max_delay_ms`, with jitter. Emits
+    /// [`ConnectionEvent::Reconnecting`] carrying the same delay.
+    pub async fn begin_reconnect_attempt(&self) -> Duration {
+        let attempt = {
+            let mut attempts = self.reconnect_attempts.write().await;
+            *attempts += 1;
+            *attempts
         };
-
-        let final_delay = (capped_delay as i64 + jitter).max(0) as u64;
-
-        Duration::from_millis(final_delay)
-    }
-
-    /// Increment reconnection attempt counter
-    pub async fn increment_reconnect_attempt(&self) {
-        let mut attempts = self.reconnect_attempts.write().await;
-        *attempts += 1;
-
-        let delay = self.next_reconnect_delay().await;
+        let delay = exponential_backoff(
+            attempt - 1,
+            self.config.reconnect_base_delay_ms,
+            self.config.reconnect_max_delay_ms,
+            self.config.reconnect_jitter_factor,
+        );
 
         let _ = self
             .event_tx
             .send(ConnectionEvent::Reconnecting {
-                attempt: *attempts,
+                attempt,
                 max_attempts: self.config.max_reconnect_attempts,
                 delay_ms: delay.as_millis() as u64,
             })
             .await;
-
         info!(
             "Reconnection attempt {}/{} with delay {:?}",
-            *attempts, self.config.max_reconnect_attempts, delay
+            attempt, self.config.max_reconnect_attempts, delay
         );
+        delay
     }
 
-    /// Check if max reconnection attempts exceeded
+    /// Whether `max_reconnect_attempts` consecutive attempts have been made.
     pub async fn is_max_reconnect_exceeded(&self) -> bool {
         *self.reconnect_attempts.read().await >= self.config.max_reconnect_attempts
     }
 
-    /// Get direct access to state machine for transitions
+    /// Shared handle to the state machine, for transitions driven by the
+    /// work loop.
     pub fn state_machine(&self) -> Arc<RwLock<StateMachine>> {
         self.state_machine.clone()
     }
 
-    /// Record successful health check
+    /// Feeds a successful health check's round trip to the adaptive keepalive.
     #[allow(dead_code)]
     pub async fn record_health_check_success(&self, rtt: Duration) {
-        let mut keepalive = self.adaptive_keepalive.write().await;
-        keepalive.record_success(rtt);
-
+        self.adaptive_keepalive.write().await.record_success(rtt);
         let _ = self
             .event_tx
             .send(ConnectionEvent::HealthCheckSuccess {
                 rtt_ms: rtt.as_millis() as u64,
             })
             .await;
-
         debug!("Health check succeeded: RTT={:?}", rtt);
     }
 
-    /// Record failed health check
+    /// Records a failed health check. When the keepalive then reports a
+    /// degraded network, an `Active` connection moves to `Degraded`.
     #[allow(dead_code)]
     pub async fn record_health_check_failure(&self, reason: String) {
-        let mut keepalive = self.adaptive_keepalive.write().await;
-        let mut metrics = self.metrics.write().await;
-
-        keepalive.record_failure();
-        metrics.record_failed_health_check();
+        let network_degraded = {
+            let mut keepalive = self.adaptive_keepalive.write().await;
+            keepalive.record_failure();
+            keepalive.is_network_degraded()
+        };
+        self.metrics.write().await.record_failed_health_check();
 
         let _ = self
             .event_tx
@@ -338,35 +324,40 @@ impl ConnectionManager {
                 reason: reason.clone(),
             })
             .await;
-
         warn!("Health check failed: {}", reason);
 
-        if keepalive.is_network_degraded() {
+        if !network_degraded {
+            return;
+        }
+        let entered_degraded = {
             let mut state = self.state_machine.write().await;
-            if state.current() == ConnectionState::Active {
+            let active = state.current() == ConnectionState::Active;
+            if active {
                 state.transition_to(
                     ConnectionState::Degraded,
                     Some("Network degradation detected".to_string()),
                 );
-
-                let _ = self
-                    .event_tx
-                    .send(ConnectionEvent::NetworkDegraded {
-                        message: "High latency or packet loss detected".to_string(),
-                    })
-                    .await;
             }
+            active
+        };
+        if entered_degraded {
+            let _ = self
+                .event_tx
+                .send(ConnectionEvent::NetworkDegraded {
+                    message: "High latency or packet loss detected".to_string(),
+                })
+                .await;
         }
     }
 
-    /// Record execution handoff completion
+    /// Reports that `count` in-flight executions were handed over after a
+    /// reconnection.
     #[allow(dead_code)]
     pub async fn record_execution_handoff(&self, count: usize) {
         let _ = self
             .event_tx
             .send(ConnectionEvent::ExecutionHandoffCompleted { count })
             .await;
-
         if count > 0 {
             info!(
                 "Successfully handed off {} executions after reconnection",
@@ -376,7 +367,7 @@ impl ConnectionManager {
     }
 }
 
-/// Statistics snapshot for observability
+/// Snapshot returned by [`ConnectionManager::stats`].
 #[derive(Debug, Clone)]
 pub struct ConnectionStats {
     pub state: ConnectionState,
@@ -385,7 +376,7 @@ pub struct ConnectionStats {
     pub reconnect_attempts: u32,
     pub keepalive_interval_secs: u64,
     #[allow(dead_code)]
-    pub keepalive_stats: super::adaptive_keepalive::KeepaliveStats,
+    pub keepalive_stats: KeepaliveStats,
     #[allow(dead_code)]
     pub total_connections_established: u64,
     pub total_reconnections: u64,
@@ -397,130 +388,198 @@ pub struct ConnectionStats {
     pub average_connection_duration_secs: f64,
 }
 
-/// Configuration loader with environment variable support
-///
-/// All connection parameters can be configured via environment variables.
-/// This follows the pattern from buildfarm's PR #2494.
+/// Builds a [`ConnectionConfig`] from the environment.
 pub struct ConfigLoader;
 
 impl ConfigLoader {
-    /// Load configuration from environment variables with sensible defaults
-    ///
-    /// All RBE_* environment variables are read and applied over the defaults.
-    /// This follows 12-Factor App principles for configuration.
+    /// Reads every variable in [`env_vars`]. An unset variable takes its
+    /// default; an unparsable one takes its default and logs a warning.
     pub fn load() -> ConnectionConfig {
         info!("Loading connection configuration from environment...");
-
         let config = Self::load_from_env();
-
         info!(
             "Configuration loaded: keepalive={}s, timeout={}s, max_reconnects={}",
             config.initial_keepalive_interval_secs,
             config.connection_timeout_secs,
             config.max_reconnect_attempts
         );
-
         config
     }
 
     fn load_from_env() -> ConnectionConfig {
+        let d = ConnectionConfig::default();
         ConnectionConfig {
-            initial_keepalive_interval_secs: Self::parse_env_u64("RBE_KEEPALIVE_INTERVAL_SECS", 20),
-            min_keepalive_interval_secs: Self::parse_env_u64("RBE_MIN_KEEPALIVE_SECS", 10),
-            max_keepalive_interval_secs: Self::parse_env_u64("RBE_MAX_KEEPALIVE_SECS", 60),
-            keepalive_timeout_secs: Self::parse_env_u64("RBE_KEEPALIVE_TIMEOUT_SECS", 15),
-            tcp_keepalive_secs: Self::parse_env_u64("RBE_TCP_KEEPALIVE_SECS", 30),
-            connection_timeout_secs: Self::parse_env_u64("RBE_CONNECTION_TIMEOUT_SECS", 30),
-            max_reconnect_attempts: Self::parse_env_u32("RBE_MAX_RECONNECT_ATTEMPTS", 10),
-            reconnect_base_delay_ms: Self::parse_env_u64("RBE_RECONNECT_BASE_DELAY_MS", 100),
-            reconnect_max_delay_ms: Self::parse_env_u64("RBE_RECONNECT_MAX_DELAY_MS", 30000),
-            reconnect_jitter_factor: Self::parse_env_f64("RBE_RECONNECT_JITTER_FACTOR", 0.25),
-            health_check_interval_secs: Self::parse_env_u64("RBE_HEALTH_CHECK_INTERVAL_SECS", 5),
-            health_check_timeout_secs: Self::parse_env_u64("RBE_HEALTH_CHECK_TIMEOUT_SECS", 3),
-            execution_handoff_timeout_secs: Self::parse_env_u64(
-                "RBE_EXECUTION_HANDOFF_TIMEOUT_SECS",
-                60,
+            initial_keepalive_interval_secs: parse_env(
+                env_vars::KEEPALIVE_INTERVAL_SECS,
+                d.initial_keepalive_interval_secs,
             ),
-            adaptive_adjustment_threshold: Self::parse_env_u32(
-                "RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD",
-                3,
+            min_keepalive_interval_secs: parse_env(
+                env_vars::MIN_KEEPALIVE_SECS,
+                d.min_keepalive_interval_secs,
             ),
-            enable_metrics: Self::parse_env_bool("RBE_ENABLE_METRICS", true),
+            max_keepalive_interval_secs: parse_env(
+                env_vars::MAX_KEEPALIVE_SECS,
+                d.max_keepalive_interval_secs,
+            ),
+            keepalive_timeout_secs: parse_env(
+                env_vars::KEEPALIVE_TIMEOUT_SECS,
+                d.keepalive_timeout_secs,
+            ),
+            tcp_keepalive_secs: parse_env(env_vars::TCP_KEEPALIVE_SECS, d.tcp_keepalive_secs),
+            connection_timeout_secs: parse_env(
+                env_vars::CONNECTION_TIMEOUT_SECS,
+                d.connection_timeout_secs,
+            ),
+            max_reconnect_attempts: parse_env(
+                env_vars::MAX_RECONNECT_ATTEMPTS,
+                d.max_reconnect_attempts,
+            ),
+            reconnect_base_delay_ms: parse_env(
+                env_vars::RECONNECT_BASE_DELAY_MS,
+                d.reconnect_base_delay_ms,
+            ),
+            reconnect_max_delay_ms: parse_env(
+                env_vars::RECONNECT_MAX_DELAY_MS,
+                d.reconnect_max_delay_ms,
+            ),
+            reconnect_jitter_factor: parse_env(
+                env_vars::RECONNECT_JITTER_FACTOR,
+                d.reconnect_jitter_factor,
+            ),
+            health_check_interval_secs: parse_env(
+                env_vars::HEALTH_CHECK_INTERVAL_SECS,
+                d.health_check_interval_secs,
+            ),
+            health_check_timeout_secs: parse_env(
+                env_vars::HEALTH_CHECK_TIMEOUT_SECS,
+                d.health_check_timeout_secs,
+            ),
+            execution_handoff_timeout_secs: parse_env(
+                env_vars::EXECUTION_HANDOFF_TIMEOUT_SECS,
+                d.execution_handoff_timeout_secs,
+            ),
+            adaptive_adjustment_threshold: parse_env(
+                env_vars::ADAPTIVE_ADJUSTMENT_THRESHOLD,
+                d.adaptive_adjustment_threshold,
+            ),
+            enable_metrics: parse_env_bool(env_vars::ENABLE_METRICS, d.enable_metrics),
         }
     }
 
-    fn parse_env_u64(var: &str, default: u64) -> u64 {
-        match env::var(var) {
-            Ok(val) => val.parse::<u64>().unwrap_or_else(|_| {
-                warn!(
-                    "Invalid value for {}: '{}', using default {}",
-                    var, val, default
-                );
-                default
-            }),
-            Err(_) => default,
-        }
-    }
-
-    fn parse_env_u32(var: &str, default: u32) -> u32 {
-        match env::var(var) {
-            Ok(val) => val.parse::<u32>().unwrap_or_else(|_| {
-                warn!(
-                    "Invalid value for {}: '{}', using default {}",
-                    var, val, default
-                );
-                default
-            }),
-            Err(_) => default,
-        }
-    }
-
-    fn parse_env_f64(var: &str, default: f64) -> f64 {
-        match env::var(var) {
-            Ok(val) => val.parse::<f64>().unwrap_or_else(|_| {
-                warn!(
-                    "Invalid value for {}: '{}', using default {}",
-                    var, val, default
-                );
-                default
-            }),
-            Err(_) => default,
-        }
-    }
-
-    fn parse_env_bool(var: &str, default: bool) -> bool {
-        match env::var(var) {
-            Ok(val) => match val.to_lowercase().as_str() {
-                "true" | "1" | "yes" => true,
-                "false" | "0" | "no" => false,
-                _ => {
-                    warn!(
-                        "Invalid value for {}: '{}', using default {}",
-                        var, val, default
-                    );
-                    default
-                }
-            },
-            Err(_) => default,
-        }
-    }
-
-    /// Print available configuration options
+    /// Logs every `RBE_*` variable with its default.
     pub fn print_available_options() {
+        let d = ConnectionConfig::default();
+        let options: [(&str, &str, String); 15] = [
+            (
+                env_vars::KEEPALIVE_INTERVAL_SECS,
+                "Keepalive interval in seconds",
+                d.initial_keepalive_interval_secs.to_string(),
+            ),
+            (
+                env_vars::MIN_KEEPALIVE_SECS,
+                "Minimum keepalive interval",
+                d.min_keepalive_interval_secs.to_string(),
+            ),
+            (
+                env_vars::MAX_KEEPALIVE_SECS,
+                "Maximum keepalive interval",
+                d.max_keepalive_interval_secs.to_string(),
+            ),
+            (
+                env_vars::KEEPALIVE_TIMEOUT_SECS,
+                "Keepalive response timeout",
+                d.keepalive_timeout_secs.to_string(),
+            ),
+            (
+                env_vars::TCP_KEEPALIVE_SECS,
+                "TCP keepalive interval",
+                d.tcp_keepalive_secs.to_string(),
+            ),
+            (
+                env_vars::CONNECTION_TIMEOUT_SECS,
+                "TCP connection timeout",
+                d.connection_timeout_secs.to_string(),
+            ),
+            (
+                env_vars::MAX_RECONNECT_ATTEMPTS,
+                "Max reconnection attempts",
+                d.max_reconnect_attempts.to_string(),
+            ),
+            (
+                env_vars::RECONNECT_BASE_DELAY_MS,
+                "Base reconnect delay ms",
+                d.reconnect_base_delay_ms.to_string(),
+            ),
+            (
+                env_vars::RECONNECT_MAX_DELAY_MS,
+                "Max reconnect delay ms",
+                d.reconnect_max_delay_ms.to_string(),
+            ),
+            (
+                env_vars::RECONNECT_JITTER_FACTOR,
+                "Jitter factor 0.0-1.0",
+                d.reconnect_jitter_factor.to_string(),
+            ),
+            (
+                env_vars::HEALTH_CHECK_INTERVAL_SECS,
+                "Health check interval",
+                d.health_check_interval_secs.to_string(),
+            ),
+            (
+                env_vars::HEALTH_CHECK_TIMEOUT_SECS,
+                "Health check timeout",
+                d.health_check_timeout_secs.to_string(),
+            ),
+            (
+                env_vars::EXECUTION_HANDOFF_TIMEOUT_SECS,
+                "Handoff timeout",
+                d.execution_handoff_timeout_secs.to_string(),
+            ),
+            (
+                env_vars::ADAPTIVE_ADJUSTMENT_THRESHOLD,
+                "Adaptive threshold",
+                d.adaptive_adjustment_threshold.to_string(),
+            ),
+            (
+                env_vars::ENABLE_METRICS,
+                "Enable metrics true/false",
+                d.enable_metrics.to_string(),
+            ),
+        ];
         info!("Available RBE_* environment variables:");
-        info!("  RBE_KEEPALIVE_INTERVAL_SECS      - Keepalive interval in seconds (default: 20)");
-        info!("  RBE_MIN_KEEPALIVE_SECS           - Minimum keepalive interval (default: 10)");
-        info!("  RBE_MAX_KEEPALIVE_SECS           - Maximum keepalive interval (default: 60)");
-        info!("  RBE_KEEPALIVE_TIMEOUT_SECS       - Keepalive response timeout (default: 15)");
-        info!("  RBE_CONNECTION_TIMEOUT_SECS      - TCP connection timeout (default: 30)");
-        info!("  RBE_MAX_RECONNECT_ATTEMPTS       - Max reconnection attempts (default: 10)");
-        info!("  RBE_RECONNECT_BASE_DELAY_MS      - Base reconnect delay ms (default: 100)");
-        info!("  RBE_RECONNECT_MAX_DELAY_MS       - Max reconnect delay ms (default: 30000)");
-        info!("  RBE_RECONNECT_JITTER_FACTOR      - Jitter factor 0.0-1.0 (default: 0.25)");
-        info!("  RBE_HEALTH_CHECK_INTERVAL_SECS   - Health check interval (default: 5)");
-        info!("  RBE_HEALTH_CHECK_TIMEOUT_SECS    - Health check timeout (default: 3)");
-        info!("  RBE_EXECUTION_HANDOFF_TIMEOUT_SECS - Handoff timeout (default: 60)");
-        info!("  RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD - Adaptive threshold (default: 3)");
-        info!("  RBE_ENABLE_METRICS               - Enable metrics true/false (default: true)");
+        for (name, description, default) in options {
+            info!("  {:<34} - {} (default: {})", name, description, default);
+        }
+    }
+}
+
+fn parse_env<T: FromStr + Display>(var: &str, default: T) -> T {
+    match env::var(var) {
+        Ok(val) => val.parse::<T>().unwrap_or_else(|_| {
+            warn!(
+                "Invalid value for {}: '{}', using default {}",
+                var, val, default
+            );
+            default
+        }),
+        Err(_) => default,
+    }
+}
+
+/// Accepts `true`/`1`/`yes` and `false`/`0`/`no`, case-insensitively.
+fn parse_env_bool(var: &str, default: bool) -> bool {
+    match env::var(var) {
+        Ok(val) => match val.to_lowercase().as_str() {
+            "true" | "1" | "yes" => true,
+            "false" | "0" | "no" => false,
+            _ => {
+                warn!(
+                    "Invalid value for {}: '{}', using default {}",
+                    var, val, default
+                );
+                default
+            }
+        },
+        Err(_) => default,
     }
 }

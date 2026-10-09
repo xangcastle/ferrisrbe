@@ -1,3 +1,9 @@
+//! Google `ByteStream` service over the CAS, for blobs too large for the
+//! batch RPCs.
+//!
+//! Resource names follow REAPI: `blobs/<hash>/<size>` for reads and
+//! `uploads/<uuid>/blobs/<hash>/<size>` for writes.
+
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, info, warn};
@@ -9,68 +15,74 @@ use crate::proto::google::bytestream::{
 };
 
 use crate::cas::{CasBackend, CasError};
+use crate::metrics::Metrics;
 use crate::types::DigestInfo;
 use bytes::Bytes;
 use futures::StreamExt;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// ByteStream Service
+/// `ByteStream` over the same [`CasBackend`] as the CAS service.
 ///
-/// Implements the Google ByteStream API for streaming blob upload/download.
-/// Uses the same CasBackend as CasService for unified storage.
-///
-/// # Streaming Architecture
-///
-/// For writes, data flows directly from the gRPC stream to disk without
-/// accumulating in memory. This allows handling blobs of any size (GBs)
-/// without OOM errors.
-///
-/// ```text
-/// gRPC Stream -> Channel -> DiskBackend -> Temp File -> Atomic Rename
-/// ```
+/// Uploads stream from the gRPC request into the backend through a bounded
+/// channel and are never buffered whole in memory, so blob size is limited by
+/// disk, not RAM. Downloads stream chunk by chunk in the same way.
 pub struct ByteStreamService {
     backend: Arc<dyn CasBackend>,
+    metrics: Arc<Metrics>,
 }
 
-/// Maximum size of a single chunk from gRPC
-#[allow(dead_code)]
-const MAX_CHUNK_SIZE: usize = 64 * 1024;
+/// Upload chunks buffered between the gRPC stream and the backend writer.
+/// A full buffer applies backpressure to the client.
+const UPLOAD_CHANNEL_DEPTH: usize = 64;
 
-/// Channel buffer size for backpressure
-/// Larger values = more memory usage but better throughput
-/// Smaller values = less memory but more context switches
-const CHANNEL_BUFFER_SIZE: usize = 64;
+/// Download chunks buffered between the backend reader and the client.
+const READ_CHANNEL_DEPTH: usize = 10;
+
+/// An upload is aborted once it exceeds its declared size by this factor, so
+/// a client cannot stream unbounded data into a temp file.
+const MAX_UPLOAD_OVERRUN_FACTOR: i64 = 2;
+
+/// Default gRPC message limit in both directions, overridable with
+/// `RBE_MAX_GRPC_MSG_SIZE` (bytes).
+const DEFAULT_MAX_GRPC_MSG_SIZE: usize = 100 * 1024 * 1024;
+
+/// The `(hash, size)` addressed by a `blobs/<hash>/<size>` or
+/// `uploads/<uuid>/blobs/<hash>/<size>` resource name: its last two segments.
+fn parse_resource_name(resource: &str) -> Option<(String, i64)> {
+    let mut segments = resource.rsplit('/');
+    let size = segments.next()?.parse::<i64>().ok()?;
+    let hash = segments.next()?.to_string();
+    Some((hash, size))
+}
+
+/// The digest a resource name addresses, or `INVALID_ARGUMENT`.
+fn resource_digest(resource: &str) -> Result<DigestInfo, Status> {
+    let (hash, size) = parse_resource_name(resource)
+        .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
+    DigestInfo::new(&hash, size)
+        .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))
+}
 
 impl ByteStreamService {
-    pub fn new(backend: Arc<dyn CasBackend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn CasBackend>, metrics: Arc<Metrics>) -> Self {
+        Self { backend, metrics }
     }
 
+    /// The tonic server for this service, with message limits of
+    /// [`DEFAULT_MAX_GRPC_MSG_SIZE`] unless `RBE_MAX_GRPC_MSG_SIZE` is set.
     pub fn into_service(self) -> ByteStreamServer<Self> {
         let max_msg_size = std::env::var("RBE_MAX_GRPC_MSG_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(100 * 1024 * 1024);
+            .unwrap_or(DEFAULT_MAX_GRPC_MSG_SIZE);
         ByteStreamServer::new(self)
             .max_decoding_message_size(max_msg_size)
             .max_encoding_message_size(max_msg_size)
     }
 
-    /// Parse resource name in format: "uploads/<uuid>/blobs/<hash>/<size>"
-    /// or "blobs/<hash>/<size>"
-    fn parse_resource_name(&self, resource: &str) -> Option<(String, i64)> {
-        let parts: Vec<&str> = resource.split('/').collect();
-        if parts.len() >= 2 {
-            let hash = parts[parts.len() - 2].to_string();
-            let size = parts.last()?.parse::<i64>().ok()?;
-            Some((hash, size))
-        } else {
-            None
-        }
-    }
-
-    /// Convert CasError to tonic Status
+    /// The gRPC status for a CAS failure: missing blobs are `NOT_FOUND`,
+    /// digest problems `INVALID_ARGUMENT`, everything else `INTERNAL`.
     fn to_status(err: CasError) -> Status {
         match err {
             CasError::NotFound(_) => Status::not_found(err.to_string()),
@@ -93,71 +105,69 @@ impl ByteStream for ByteStreamService {
         &self,
         request: Request<ReadRequest>,
     ) -> Result<Response<ReceiverStream<Result<ReadResponse, Status>>>, Status> {
-        let req = request.into_inner();
         let start = Instant::now();
-        info!(
-            "📡 ByteStream::Read resource={} offset={} limit={}",
-            req.resource_name, req.read_offset, req.read_limit
-        );
+        let method = "Read";
 
-        let (hash, _size) = self
-            .parse_resource_name(&req.resource_name)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
+        let result: Result<Response<Self::ReadStream>, Status> = async move {
+            let req = request.into_inner();
+            info!(
+                "ByteStream::Read resource={} offset={} limit={}",
+                req.resource_name, req.read_offset, req.read_limit
+            );
 
-        let digest_info = DigestInfo::new(&hash, _size)
-            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
-        let backend = self.backend.clone();
-        let (tx, rx) = tokio::sync::mpsc::channel(10);
+            let digest_info = resource_digest(&req.resource_name)?;
+            let (offset, limit) =
+                read_window(req.read_offset, req.read_limit, digest_info.size).map_err(|e| *e)?;
+            let backend = self.backend.clone();
+            let (tx, rx) = tokio::sync::mpsc::channel(READ_CHANNEL_DEPTH);
 
-        tokio::spawn(async move {
-            let limit = if req.read_limit > 0 {
-                Some(req.read_limit as usize)
-            } else {
-                None
-            };
-
-            match backend
-                .read_stream(&digest_info, req.read_offset as usize, limit)
-                .await
-            {
-                Ok(Some(mut stream)) => {
-                    while let Some(chunk_result) = stream.next().await {
-                        match chunk_result {
-                            Ok(data) => {
-                                if tx
-                                    .send(Ok(ReadResponse {
-                                        data: data.to_vec(),
-                                    }))
-                                    .await
-                                    .is_err()
-                                {
-                                    debug!("Client disconnected during read");
+            tokio::spawn(async move {
+                match backend.read_stream(&digest_info, offset, limit).await {
+                    Ok(Some(mut stream)) => {
+                        while let Some(chunk_result) = stream.next().await {
+                            match chunk_result {
+                                Ok(data) => {
+                                    if tx
+                                        .send(Ok(ReadResponse {
+                                            data: data.to_vec(),
+                                        }))
+                                        .await
+                                        .is_err()
+                                    {
+                                        debug!("Client disconnected during read");
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Err(Self::to_status(e))).await;
                                     break;
                                 }
                             }
-                            Err(e) => {
-                                let _ = tx.send(Err(Self::to_status(e))).await;
-                                break;
-                            }
                         }
                     }
+                    Ok(None) => {
+                        let _ = tx.send(Err(Status::not_found("Blob not found"))).await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(Self::to_status(e))).await;
+                    }
                 }
-                Ok(None) => {
-                    let _ = tx.send(Err(Status::not_found("Blob not found"))).await;
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(Self::to_status(e))).await;
-                }
-            }
 
-            info!(
-                "📡 ByteStream::Read completed resource={} elapsed_ms={}",
-                req.resource_name,
-                start.elapsed().as_millis()
-            );
-        });
+                info!(
+                    "ByteStream::Read completed resource={} elapsed_ms={}",
+                    req.resource_name,
+                    start.elapsed().as_millis()
+                );
+            });
 
-        Ok(Response::new(ReceiverStream::new(rx)))
+            Ok(Response::new(ReceiverStream::new(rx)))
+        }
+        .await;
+
+        let status_label = if result.is_ok() { "ok" } else { "error" };
+        self.metrics
+            .record_grpc_request("byte_stream", method, start.elapsed(), status_label);
+        result
     }
 
     async fn write(
@@ -165,190 +175,211 @@ impl ByteStream for ByteStreamService {
         request: Request<Streaming<WriteRequest>>,
     ) -> Result<Response<WriteResponse>, Status> {
         let start = Instant::now();
-        let mut stream = request.into_inner();
+        let method = "Write";
 
-        let first_chunk = match stream.message().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => return Err(Status::invalid_argument("Empty stream")),
-            Err(e) => return Err(Status::internal(format!("Stream error: {}", e))),
-        };
+        let result: Result<Response<WriteResponse>, Status> = async move {
+            let mut stream = request.into_inner();
 
-        let resource_name = first_chunk.resource_name;
-        if resource_name.is_empty() {
-            return Err(Status::invalid_argument("Missing resource_name"));
-        }
+            let first_chunk = match stream.message().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => return Err(Status::invalid_argument("Empty stream")),
+                Err(e) => return Err(Status::internal(format!("Stream error: {}", e))),
+            };
 
-        let (hash, expected_size) = self
-            .parse_resource_name(&resource_name)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
+            let WriteRequest {
+                resource_name,
+                write_offset,
+                finish_write,
+                data,
+            } = first_chunk;
+            if resource_name.is_empty() {
+                return Err(Status::invalid_argument("Missing resource_name"));
+            }
 
-        let digest_info = DigestInfo::new(&hash, expected_size)
-            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
+            let digest_info = resource_digest(&resource_name)?;
+            let expected_size = digest_info.size;
 
-        info!(
-            "📡 ByteStream::Write started resource={} size={}",
-            resource_name, expected_size
-        );
-
-        let (data_tx, data_rx) =
-            tokio::sync::mpsc::channel::<Result<Bytes, CasError>>(CHANNEL_BUFFER_SIZE);
-        let data_stream = tokio_stream::wrappers::ReceiverStream::new(data_rx);
-
-        let backend = self.backend.clone();
-        let write_task = tokio::spawn(async move {
-            backend
-                .write_stream(&digest_info, Box::pin(data_stream))
-                .await
-        });
-
-        let mut total_received: i64 = first_chunk.data.len() as i64;
-        if data_tx
-            .send(Ok(Bytes::from(first_chunk.data)))
-            .await
-            .is_err()
-        {
-            return Err(Status::internal("Backend channel closed"));
-        }
-
-        while let Some(chunk_result) = stream.message().await? {
-            let chunk_size = chunk_result.data.len() as i64;
-            total_received += chunk_size;
-
-            if total_received > expected_size * 2 {
-                warn!(
-                    "Upload size {} exceeds expected size {} by >2x, aborting",
-                    total_received, expected_size
-                );
+            if write_offset != 0 {
+                let stored = self
+                    .backend
+                    .contains(&digest_info)
+                    .await
+                    .map_err(Self::to_status)?;
+                if stored && write_offset == expected_size {
+                    return Ok(Response::new(WriteResponse {
+                        committed_size: expected_size,
+                    }));
+                }
                 return Err(Status::invalid_argument(format!(
-                    "Upload size {} exceeds expected {}",
-                    total_received, expected_size
+                    "write_offset {write_offset} is not the committed size of {resource_name}: \
+                     QueryWriteStatus reports 0 until the blob is complete"
                 )));
             }
 
-            if data_tx
-                .send(Ok(Bytes::from(chunk_result.data)))
+            info!(
+                "ByteStream::Write started resource={} size={}",
+                resource_name, expected_size
+            );
+
+            let (data_tx, data_rx) =
+                tokio::sync::mpsc::channel::<Result<Bytes, CasError>>(UPLOAD_CHANNEL_DEPTH);
+            let data_stream = tokio_stream::wrappers::ReceiverStream::new(data_rx);
+
+            let backend = self.backend.clone();
+            let write_task = tokio::spawn(async move {
+                backend
+                    .write_stream(&digest_info, Box::pin(data_stream))
+                    .await
+            });
+
+            let mut total_received: i64 = 0;
+            let mut chunk = Some((data, finish_write));
+            while let Some((data, finish_write)) = chunk.take() {
+                total_received += data.len() as i64;
+
+                if total_received > expected_size * MAX_UPLOAD_OVERRUN_FACTOR {
+                    warn!(
+                        "Upload size {} exceeds expected size {} by >2x, aborting",
+                        total_received, expected_size
+                    );
+                    return Err(Status::invalid_argument(format!(
+                        "Upload size {} exceeds expected {}",
+                        total_received, expected_size
+                    )));
+                }
+
+                if data_tx.send(Ok(Bytes::from(data))).await.is_err() || finish_write {
+                    break;
+                }
+                chunk = stream
+                    .message()
+                    .await?
+                    .map(|next| (next.data, next.finish_write));
+            }
+
+            drop(data_tx);
+
+            let write_result = write_task
                 .await
-                .is_err()
-            {
-                break;
-            }
+                .map_err(|e| Status::internal(format!("Write task failed: {}", e)))?;
 
-            if chunk_result.finish_write {
-                break;
-            }
-        }
-
-        drop(data_tx);
-
-        let write_result = write_task
-            .await
-            .map_err(|e| Status::internal(format!("Write task failed: {}", e)))?;
-
-        match write_result {
-            Ok(()) => {
-                info!(
-                    "✅ ByteStream::Write completed resource={} bytes_received={} elapsed_ms={}",
-                    resource_name,
-                    total_received,
-                    start.elapsed().as_millis()
-                );
-                Ok(Response::new(WriteResponse {
-                    committed_size: total_received,
-                }))
-            }
-            Err(e) => {
-                warn!(
-                    "❌ ByteStream::Write failed resource={} error={} elapsed_ms={}",
-                    resource_name,
-                    e,
-                    start.elapsed().as_millis()
-                );
-                Err(Self::to_status(e))
+            match write_result {
+                Ok(()) => {
+                    info!(
+                        "ByteStream::Write completed resource={} bytes_received={} elapsed_ms={}",
+                        resource_name,
+                        total_received,
+                        start.elapsed().as_millis()
+                    );
+                    let size = self.backend.size_bytes();
+                    let entries = self.backend.count_entries().await;
+                    self.metrics.record_cas_stats(size, entries);
+                    Ok(Response::new(WriteResponse {
+                        committed_size: total_received,
+                    }))
+                }
+                Err(e) => {
+                    warn!(
+                        "ByteStream::Write failed resource={} error={} elapsed_ms={}",
+                        resource_name,
+                        e,
+                        start.elapsed().as_millis()
+                    );
+                    Err(Self::to_status(e))
+                }
             }
         }
+        .await;
+
+        let status_label = if result.is_ok() { "ok" } else { "error" };
+        self.metrics
+            .record_grpc_request("byte_stream", method, start.elapsed(), status_label);
+        result
     }
 
     async fn query_write_status(
         &self,
         request: Request<QueryWriteStatusRequest>,
     ) -> Result<Response<QueryWriteStatusResponse>, Status> {
-        let req = request.into_inner();
-        let (hash, size) = self
-            .parse_resource_name(&req.resource_name)
-            .ok_or_else(|| Status::invalid_argument("Invalid resource name"))?;
+        let start = Instant::now();
+        let method = "QueryWriteStatus";
 
-        let digest_info = DigestInfo::new(&hash, size)
-            .map_err(|e| Status::invalid_argument(format!("Invalid digest: {}", e)))?;
+        let result: Result<Response<QueryWriteStatusResponse>, Status> = async move {
+            let req = request.into_inner();
+            let digest_info = resource_digest(&req.resource_name)?;
+            let size = digest_info.size;
 
-        let committed_size = match self.backend.contains(&digest_info).await {
-            Ok(true) => size,
-            Ok(false) => 0,
-            Err(e) => return Err(Self::to_status(e)),
-        };
+            let committed_size = match self.backend.contains(&digest_info).await {
+                Ok(true) => size,
+                Ok(false) => 0,
+                Err(e) => return Err(Self::to_status(e)),
+            };
 
-        Ok(Response::new(QueryWriteStatusResponse {
-            committed_size,
-            complete: committed_size == size,
-        }))
+            Ok(Response::new(QueryWriteStatusResponse {
+                committed_size,
+                complete: committed_size == size,
+            }))
+        }
+        .await;
+
+        let status_label = if result.is_ok() { "ok" } else { "error" };
+        self.metrics
+            .record_grpc_request("byte_stream", method, start.elapsed(), status_label);
+        result
     }
+}
+
+/// The offset and optional limit of a read of a `size`-byte blob, rejecting
+/// what the ByteStream contract forbids: an offset that is negative or past
+/// the end (`OUT_OF_RANGE`) and a negative limit. A zero limit means none.
+fn read_window(offset: i64, limit: i64, size: i64) -> Result<(usize, Option<usize>), Box<Status>> {
+    if offset < 0 || offset > size {
+        return Err(Box::new(Status::out_of_range(format!(
+            "read_offset {offset} is outside the {size}-byte blob"
+        ))));
+    }
+    if limit < 0 {
+        return Err(Box::new(Status::invalid_argument(format!(
+            "read_limit {limit} is negative"
+        ))));
+    }
+    Ok((offset as usize, (limit > 0).then_some(limit as usize)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cas::backends::DiskBackend;
-    use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn test_parse_resource_name() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = Arc::new(DiskBackend::new(temp_dir.path()).await.unwrap());
-        let service = ByteStreamService::new(backend);
-
-        let result = service.parse_resource_name("blobs/abc123/100");
-        assert_eq!(result, Some(("abc123".to_string(), 100)));
-
-        let result = service.parse_resource_name("uploads/uuid-123/blobs/def456/200");
-        assert_eq!(result, Some(("def456".to_string(), 200)));
-
-        assert!(service.parse_resource_name("invalid").is_none());
-        assert!(service.parse_resource_name("blobs/abc").is_none());
+    #[test]
+    fn test_parse_resource_name() {
+        assert_eq!(
+            parse_resource_name("blobs/abc123/100"),
+            Some(("abc123".to_string(), 100))
+        );
+        assert_eq!(
+            parse_resource_name("uploads/uuid-123/blobs/def456/200"),
+            Some(("def456".to_string(), 200))
+        );
+        assert!(parse_resource_name("invalid").is_none());
+        assert!(parse_resource_name("blobs/abc").is_none());
     }
 
-    #[tokio::test]
-    async fn test_write_and_read_streaming() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = Arc::new(DiskBackend::new(temp_dir.path()).await.unwrap());
-        let service = ByteStreamService::new(backend);
-
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let data = b"Hello, World! test data";
-
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let actual_hash = hex::encode(hasher.finalize());
-        let size = data.len() as i64;
-
-        let chunks: Vec<WriteRequest> = vec![
-            WriteRequest {
-                resource_name: format!("blobs/{}/{}", actual_hash, size),
-                write_offset: 0,
-                data: data[..5].to_vec(),
-                finish_write: false,
-            },
-            WriteRequest {
-                resource_name: String::new(),
-                write_offset: 5,
-                data: data[5..10].to_vec(),
-                finish_write: false,
-            },
-            WriteRequest {
-                resource_name: String::new(),
-                write_offset: 10,
-                data: data[10..].to_vec(),
-                finish_write: true,
-            },
-        ];
+    #[test]
+    fn a_read_window_outside_the_blob_is_rejected() {
+        assert_eq!(read_window(0, 0, 10).unwrap(), (0, None));
+        assert_eq!(read_window(4, 3, 10).unwrap(), (4, Some(3)));
+        assert_eq!(read_window(10, 0, 10).unwrap(), (10, None));
+        assert_eq!(
+            read_window(-1, 0, 10).unwrap_err().code(),
+            tonic::Code::OutOfRange
+        );
+        assert_eq!(
+            read_window(11, 0, 10).unwrap_err().code(),
+            tonic::Code::OutOfRange
+        );
+        assert_eq!(
+            read_window(0, -1, 10).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
     }
 }

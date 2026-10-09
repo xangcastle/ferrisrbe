@@ -1,105 +1,71 @@
-version: '3.8'
-
-# Podman Compose stack for local FerrisRBE development.
-# Images must be built and loaded with Bazel first:
-#
-#   bazel run //oci:server.amd64.image.load
-#   bazel run //oci:worker.amd64.image.load
-#   bazel run //oci:cache.amd64.image.load
-#   bazel run //oci:bes.amd64.image.load
-#
-# Then start the stack:
-#   podman-compose -f podman-compose.yml up -d
-
 services:
-  cache:
-    image: localhost/ferrisrbe/cache:latest
+  server:
+    image: ${FERRIS_SERVER_IMAGE:-docker.io/xangcastle/ferris-server:latest}
+    container_name: ferrisrbe-server
     ports:
       - "9094:9094"
       - "8080:8080"
     volumes:
-      - ./.cache:/data
+      - ferrisrbe-server-data:/data
     environment:
-      - RUST_LOG=info
-      - RBE_CACHE_PORT=9094
-      - RBE_CACHE_HTTP_PORT=8080
-      - RBE_CACHE_DIR=/data
-      - RBE_CACHE_MAX_SIZE_GB=10
-      - RBE_CACHE_AC_MAX_SIZE_GB=2
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080'"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-  server:
-    image: localhost/ferrisrbe/server:latest
-    ports:
-      - "9092:9092"
-    environment:
-      - RBE_PORT=9092
-      - RBE_BIND_ADDRESS=0.0.0.0
-      - RUST_LOG=info
-      - CAS_ENDPOINT=cache:9094
-      - RBE_L1_CACHE_CAPACITY=100000
-    depends_on:
-      cache:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "sh", "-c", "bash -c '</dev/tcp/localhost/9092'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
+      RUST_LOG: info
+      RBE_CACHE_DIR: /data
+      RBE_BES_DATA_DIR: /data/bes
+      RBE_CACHE_MAX_SIZE_GB: "100"
+      RBE_CACHE_AC_MAX_SIZE_GB: "10"
+    restart: unless-stopped
 
   worker:
-    image: localhost/ferrisrbe/worker:latest
+    image: ${FERRIS_WORKER_IMAGE:-docker.io/xangcastle/ferris-worker:latest}
+    container_name: ferrisrbe-worker
+    volumes:
+      - ferrisrbe-worker-data:/workspace
     environment:
-      - WORKER_ID=worker-local
-      - SERVER_ENDPOINT=http://server:9092
-      - CAS_ENDPOINT=http://cache:9094
-      - RUST_LOG=info
-      - MAX_CONCURRENT=4
-      - WORKER_TYPE=default
-      - WORKER_LABELS=os=linux,arch=amd64
-      - RBE_ALLOW_SYSTEM_EXECUTABLES=1
+      RUST_LOG: info
+      WORKER_ID: compose
+      SERVER_ENDPOINT: http://server:9094
+      CAS_ENDPOINT: http://server:9094
+      MAX_CONCURRENT: "8"
+      WORKDIR: /workspace
+    restart: unless-stopped
     depends_on:
-      server:
-        condition: service_healthy
-    deploy:
-      replicas: 2
-    volumes:
-      - worker-workdir:/workspace
-    healthcheck:
-      test: ["CMD-SHELL", "grep -qa /app/worker /proc/*/cmdline"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      - server
 
-  bes:
-    image: localhost/ferrisrbe/bes:latest
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    container_name: ferrisrbe-prometheus
     ports:
-      - "9095:9095"
-      - "9096:9096"
+      - "9090:9090"
     volumes:
-      - ./.bes:/data/bes
-      - ./ui/dist:/app/ui/dist
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - ferrisrbe-prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    depends_on:
+      - server
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    container_name: ferrisrbe-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+      - ferrisrbe-grafana-data:/var/lib/grafana
     environment:
-      - RUST_LOG=info
-      - RBE_BES_PORT=9095
-      - RBE_BES_UI_PORT=9096
-      - RBE_BES_BIND_ADDRESS=0.0.0.0
-      - RBE_BES_DATA_DIR=/data/bes
-      - RBE_BES_STATIC_DIR=/app/ui/dist
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9096'"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
 
 volumes:
-  worker-workdir:
-  bes-data:
+  ferrisrbe-server-data:
+  ferrisrbe-worker-data:
+  ferrisrbe-prometheus-data:
+  ferrisrbe-grafana-data:

@@ -1,128 +1,192 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getTests } from '../api/bes';
-import type { TestSummary } from '../types';
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { FlaskConicalIcon, RefreshCwIcon } from "lucide-react";
+import { getTests } from "@/api/bes";
+import Pager from "@/components/Pager";
+import StatusBadge from "@/components/StatusBadge";
+import {
+  EmptyState,
+  OutcomeBar,
+  PageHeader,
+  SearchInput,
+} from "@/components/page";
+import { useDebounced } from "@/hooks/useDebounced";
+import type { TestSummary } from "@/types";
+import { Badge } from "@/shadcn/ui/badge";
+import { Card, CardContent } from "@/shadcn/ui/card";
+import { Skeleton } from "@/shadcn/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/shadcn/ui/table";
 
-function statusClass(status: string) {
-  switch (status) {
-    case 'PASSED':
-      return 'bg-green-100 text-green-800';
-    case 'FAILED':
-    case 'TIMEOUT':
-    case 'INCOMPLETE':
-    case 'REMOTE_FAILURE':
-    case 'FAILED_TO_BUILD':
-    case 'TOOL_HALTED_BEFORE_TESTING':
-      return 'bg-red-100 text-red-800';
-    case 'FLAKY':
-      return 'bg-yellow-100 text-yellow-800';
-    default:
-      return 'bg-gray-100 text-gray-800';
-  }
-}
+const PAGE_SIZE = 50;
 
 export default function Tests() {
   const [tests, setTests] = useState<TestSummary[]>([]);
-  const [filter, setFilter] = useState('');
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const q = useDebounced(filter, 300);
 
   useEffect(() => {
+    setPage(0);
+  }, [q]);
+
+  useEffect(() => {
+    let cancelled = false;
     async function load() {
       try {
         setLoading(true);
-        const data = await getTests();
-        setTests(data);
+        const data = await getTests({
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+          q: q || undefined,
+        });
+        if (cancelled) return;
+        setTests(data.items);
+        setTotal(data.total);
+        setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load tests');
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to load tests");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
     load();
-  }, []);
-
-  const filtered = useMemo(() => {
-    const q = filter.toLowerCase();
-    return tests.filter((t) => t.label.toLowerCase().includes(q));
-  }, [tests, filter]);
-
-  if (loading) return <p className="text-gray-600">Loading tests...</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+    return () => {
+      cancelled = true;
+    };
+  }, [page, q]);
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-2xl font-bold text-gray-900">Tests</h2>
-      <p className="text-sm text-gray-500">
-        Historial independiente por test. Cada fila muestra el último estado y el conteo de ejecuciones.
-      </p>
+    <div className="space-y-6">
+      <PageHeader
+        icon={FlaskConicalIcon}
+        title="Tests"
+        description="Every test with its latest result, flakiness and history."
+      >
+        {loading && tests.length > 0 && (
+          <RefreshCwIcon className="size-4 animate-spin text-muted-foreground" />
+        )}
+      </PageHeader>
 
-      <input
-        type="text"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-        placeholder="Filter by test label..."
-        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 sm:w-96"
-      />
-
-      <div className="overflow-hidden rounded-lg border bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Label
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Latest Status
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Total Runs
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Passed / Failed / Cached / Flaky
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                  No tests found.
-                </td>
-              </tr>
-            )}
-            {filtered.map((test) => (
-              <tr
-                key={test.label}
-                onClick={() => navigate(`/tests/${encodeURIComponent(test.label)}`)}
-                className="cursor-pointer hover:bg-gray-50"
-              >
-                <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                  <div className="max-w-md truncate" title={test.label}>
-                    {test.label}
-                  </div>
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass(test.latest_status)}`}>
-                    {test.latest_status}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{test.total_runs}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  <span className="text-green-600">{test.passed_count}</span>
-                  {' / '}
-                  <span className="text-red-600">{test.failed_count}</span>
-                  {' / '}
-                  <span className="text-blue-600">{test.cached_count}</span>
-                  {' / '}
-                  <span className="text-yellow-600">{test.flaky_count}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Card className="gap-0 py-0">
+        <div className="flex items-center justify-between gap-3 border-b px-6 py-4">
+          <p className="text-sm text-muted-foreground tabular-nums">
+            {total.toLocaleString()} tests
+          </p>
+          <SearchInput
+            value={filter}
+            onChange={setFilter}
+            placeholder="Filter by test label…"
+            className="sm:w-80"
+          />
+        </div>
+        <CardContent className="px-0">
+          {error ? (
+            <p className="px-6 py-6 text-sm text-destructive">{error}</p>
+          ) : loading && tests.length === 0 ? (
+            <div className="space-y-2 p-6">
+              {Array.from({ length: 8 }, (_, i) => (
+                <Skeleton key={i} className="h-10" />
+              ))}
+            </div>
+          ) : tests.length === 0 ? (
+            <EmptyState icon={FlaskConicalIcon} title="No tests found">
+              {filter
+                ? "Nothing matches the filter."
+                : "Tests show up after a bazel test streams to this server."}
+            </EmptyState>
+          ) : (
+            <Table>
+              <TableHeader className="bg-muted/40">
+                <TableRow>
+                  <TableHead className="pl-6">Test</TableHead>
+                  <TableHead>Latest</TableHead>
+                  <TableHead className="text-right">Runs</TableHead>
+                  <TableHead>Passed / failed / cached</TableHead>
+                  <TableHead className="pr-6 text-right">Flaky</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {tests.map((test) => (
+                  <TableRow
+                    key={test.label}
+                    className="cursor-pointer"
+                    onClick={() =>
+                      navigate(`/tests/${encodeURIComponent(test.label)}`)
+                    }
+                  >
+                    <TableCell className="max-w-xl pl-6">
+                      <div
+                        className="truncate font-mono text-xs font-medium"
+                        title={test.label}
+                      >
+                        {test.label}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={test.latest_status} />
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {test.total_runs.toLocaleString()}
+                    </TableCell>
+                    <TableCell>
+                      <OutcomeBar
+                        parts={[
+                          {
+                            label: "passed",
+                            count: test.passed_count,
+                            className: "bg-success",
+                          },
+                          {
+                            label: "failed",
+                            count: test.failed_count,
+                            className: "bg-destructive",
+                          },
+                          {
+                            label: "cached",
+                            count: test.cached_count,
+                            className: "bg-chart-2",
+                          },
+                        ]}
+                      />
+                    </TableCell>
+                    <TableCell className="pr-6 text-right">
+                      {test.flaky_count > 0 ? (
+                        <Badge
+                          variant="outline"
+                          className="border-warning/40 bg-warning/15"
+                        >
+                          {test.flaky_count.toLocaleString()}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">–</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+        <Pager
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          loading={loading}
+          onPage={setPage}
+        />
+      </Card>
     </div>
   );
 }

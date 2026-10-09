@@ -1,13 +1,10 @@
-//! Resilient Worker Connection Architecture
+//! Lifecycle of a worker's gRPC stream to the scheduler: a connection state
+//! machine, adaptive keepalive, exponential reconnection backoff, health
+//! checks and connection metrics.
 //!
-//! Provides enterprise-grade connection management for RBE workers including:
-//! - Configurable keepalive via environment variables
-//! - Bidirectional health checking
-//! - Zero-downtime reconnection with execution handoff
-//! - Comprehensive metrics and observability
-//!
-//! Configuration is 100% environment-based following 12-Factor App principles.
-//! All timeouts, intervals, and thresholds can be configured via env vars.
+//! Every tunable comes from an `RBE_*` environment variable listed in
+//! [`env_vars`]; [`ConfigLoader`] reads them over
+//! [`ConnectionConfig::default`].
 
 pub mod adaptive_keepalive;
 pub mod connection_manager;
@@ -16,67 +13,41 @@ pub mod health_checker;
 pub mod metrics;
 pub mod reconnection;
 
-pub use adaptive_keepalive::AdaptiveKeepalive;
-pub use connection_manager::{
-    ConfigLoader, ConnectionConfig, ConnectionEvent, ConnectionManager, ConnectionStats,
-};
+pub use connection_manager::{ConfigLoader, ConnectionConfig, ConnectionEvent, ConnectionManager};
 pub use connection_state::ConnectionState;
-pub use health_checker::{HealthCheckConfig, HealthChecker};
-pub use metrics::ConnectionMetrics;
-pub use reconnection::{ReconnectionPolicy, ReconnectionStrategy};
 
-/// Default configuration - production-ready sensible defaults
-///
-/// These values are used when environment variables are not set.
-/// All values can be overridden via environment variables (see ConfigLoader).
-pub fn default_config() -> ConnectionConfig {
-    ConnectionConfig {
-        initial_keepalive_interval_secs: 20,
-        min_keepalive_interval_secs: 10,
-        max_keepalive_interval_secs: 60,
-        keepalive_timeout_secs: 15,
-        tcp_keepalive_secs: 30,
-        connection_timeout_secs: 30,
-        max_reconnect_attempts: 10,
-        reconnect_base_delay_ms: 100,
-        reconnect_max_delay_ms: 30000,
-        reconnect_jitter_factor: 0.25,
-        health_check_interval_secs: 5,
-        health_check_timeout_secs: 3,
-        execution_handoff_timeout_secs: 60,
-        adaptive_adjustment_threshold: 3,
-        enable_metrics: true,
-    }
-}
-
-/// Environment variable names for configuration
+/// Environment variables read by [`ConfigLoader`], one per
+/// [`ConnectionConfig`] field. Defaults are those of
+/// [`ConnectionConfig::default`].
 pub mod env_vars {
-    /// Interval between keepalive pings in seconds (default: 20)
+    /// Keepalive interval at connection start, in seconds.
     pub const KEEPALIVE_INTERVAL_SECS: &str = "RBE_KEEPALIVE_INTERVAL_SECS";
-    /// Minimum keepalive interval in seconds (default: 10)
+    /// Shortest adaptive keepalive interval, in seconds.
     pub const MIN_KEEPALIVE_SECS: &str = "RBE_MIN_KEEPALIVE_SECS";
-    /// Maximum keepalive interval in seconds (default: 60)
+    /// Longest adaptive keepalive interval, in seconds.
     pub const MAX_KEEPALIVE_SECS: &str = "RBE_MAX_KEEPALIVE_SECS";
-    /// Timeout for keepalive responses in seconds (default: 15)
+    /// Time allowed for a keepalive response, in seconds.
     pub const KEEPALIVE_TIMEOUT_SECS: &str = "RBE_KEEPALIVE_TIMEOUT_SECS";
-    /// TCP connection timeout in seconds (default: 30)
+    /// TCP-level keepalive, in seconds.
+    pub const TCP_KEEPALIVE_SECS: &str = "RBE_TCP_KEEPALIVE_SECS";
+    /// Time allowed to establish the TCP connection, in seconds.
     pub const CONNECTION_TIMEOUT_SECS: &str = "RBE_CONNECTION_TIMEOUT_SECS";
-    /// Maximum reconnection attempts before giving up (default: 10)
+    /// Consecutive reconnection attempts before the worker exits.
     pub const MAX_RECONNECT_ATTEMPTS: &str = "RBE_MAX_RECONNECT_ATTEMPTS";
-    /// Base delay for exponential backoff in milliseconds (default: 100)
+    /// First backoff delay, in milliseconds.
     pub const RECONNECT_BASE_DELAY_MS: &str = "RBE_RECONNECT_BASE_DELAY_MS";
-    /// Maximum delay for exponential backoff in milliseconds (default: 30000)
+    /// Backoff delay cap, in milliseconds.
     pub const RECONNECT_MAX_DELAY_MS: &str = "RBE_RECONNECT_MAX_DELAY_MS";
-    /// Jitter factor for randomizing delays, 0.0-1.0 (default: 0.25)
+    /// Backoff jitter as a fraction of the delay, `0.0..=1.0`.
     pub const RECONNECT_JITTER_FACTOR: &str = "RBE_RECONNECT_JITTER_FACTOR";
-    /// Health check interval in seconds (default: 5)
+    /// Interval between health checks, in seconds.
     pub const HEALTH_CHECK_INTERVAL_SECS: &str = "RBE_HEALTH_CHECK_INTERVAL_SECS";
-    /// Health check timeout in seconds (default: 3)
+    /// Time allowed for one health check, in seconds.
     pub const HEALTH_CHECK_TIMEOUT_SECS: &str = "RBE_HEALTH_CHECK_TIMEOUT_SECS";
-    /// Execution handoff timeout during reconnection in seconds (default: 60)
+    /// Time allowed to hand executions over after reconnecting, in seconds.
     pub const EXECUTION_HANDOFF_TIMEOUT_SECS: &str = "RBE_EXECUTION_HANDOFF_TIMEOUT_SECS";
-    /// Threshold for adaptive keepalive adjustment (default: 3)
+    /// Consecutive keepalive successes before the interval grows.
     pub const ADAPTIVE_ADJUSTMENT_THRESHOLD: &str = "RBE_ADAPTIVE_ADJUSTMENT_THRESHOLD";
-    /// Enable metrics collection, "true" or "false" (default: true)
+    /// `true`/`1`/`yes` or `false`/`0`/`no`: whether metrics are recorded.
     pub const ENABLE_METRICS: &str = "RBE_ENABLE_METRICS";
 }

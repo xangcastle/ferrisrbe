@@ -1,81 +1,67 @@
-//! Content Addressable Storage (CAS) Backend
+//! Content Addressable Storage.
 //!
-//! Provides a unified interface for storing and retrieving blobs by their content digest.
-//! All CAS operations are async and support both complete blobs and streaming access.
+//! [`CasBackend`] is the storage contract behind the REAPI CAS and ByteStream
+//! services: blobs are addressed by the SHA-256 of their content and are
+//! immutable once stored.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+use crate::types::DigestInfo;
 
 pub mod backends;
 pub mod error;
 
 pub use error::CasError;
 
-/// Result type for CAS operations
+/// Result type of CAS operations.
 pub type CasResult<T> = Result<T, CasError>;
 
-/// Content Addressable Storage backend trait
+/// Content-addressed blob store.
 ///
-/// Implementations must be thread-safe (Send + Sync) and support concurrent access.
-/// All operations are async and may involve network or disk I/O.
+/// Implementations are shared across request handlers and must support
+/// concurrent calls on any mix of digests. The batch operations have
+/// sequential default implementations; backends with a native batch API
+/// override them to use a single round trip.
 #[async_trait]
 pub trait CasBackend: Send + Sync + 'static {
-    /// Check if a blob with the given digest exists in storage
-    async fn contains(&self, digest: &crate::types::DigestInfo) -> CasResult<bool>;
+    /// Whether a blob with this digest is stored.
+    async fn contains(&self, digest: &DigestInfo) -> CasResult<bool>;
 
-    /// Read a complete blob from storage
-    ///
-    /// Returns `Ok(None)` if the blob doesn't exist.
-    /// For large blobs, consider using `read_stream` instead.
-    async fn read(&self, digest: &crate::types::DigestInfo) -> CasResult<Option<Bytes>>;
+    /// The whole blob, or `None` if it is not stored. Large blobs should be
+    /// read with [`CasBackend::read_stream`].
+    async fn read(&self, digest: &DigestInfo) -> CasResult<Option<Bytes>>;
 
-    /// Read a blob as a stream of chunks
-    ///
-    /// This is the preferred method for reading large blobs as it allows
-    /// streaming without loading the entire blob into memory.
-    ///
-    /// # Arguments
-    /// * `digest` - The digest of the blob to read
-    /// * `offset` - Byte offset to start reading from
-    /// * `limit` - Optional maximum number of bytes to read
+    /// The blob as a stream of chunks, starting at byte `offset` and yielding
+    /// at most `limit` bytes; `None` if it is not stored.
     async fn read_stream(
         &self,
-        digest: &crate::types::DigestInfo,
+        digest: &DigestInfo,
         offset: usize,
         limit: Option<usize>,
     ) -> CasResult<Option<BoxStream<'static, CasResult<Bytes>>>>;
 
-    /// Write a complete blob to storage
+    /// Stores `data` under `digest`.
     ///
-    /// The implementation must verify that the data matches the provided digest.
-    /// If the digest doesn't match, the operation fails with `CasError::DigestMismatch`.
-    async fn write(&self, digest: &crate::types::DigestInfo, data: Bytes) -> CasResult<()>;
+    /// Fails with [`CasError::DigestMismatch`] when `data` does not hash to
+    /// `digest`; nothing is stored in that case.
+    async fn write(&self, digest: &DigestInfo, data: Bytes) -> CasResult<()>;
 
-    /// Write a blob from a stream of chunks
+    /// Stores the concatenated chunks of `stream` under `digest`.
     ///
-    /// This is the preferred method for writing large blobs as it allows
-    /// streaming without loading the entire blob into memory.
-    ///
-    /// The implementation must:
-    /// 1. Verify the digest matches the written data
-    /// 2. Store atomically (either complete successfully or not at all)
-    /// 3. Support concurrent writes of different blobs
+    /// The blob becomes visible only once complete and verified against the
+    /// digest; a failed or mismatched write leaves nothing behind.
     async fn write_stream(
         &self,
-        digest: &crate::types::DigestInfo,
+        digest: &DigestInfo,
         stream: BoxStream<'static, CasResult<Bytes>>,
     ) -> CasResult<()>;
 
-    /// Find which of the provided digests are missing from storage.
-    ///
-    /// Backends that support batched existence checks (e.g. gRPC CAS)
-    /// should override this default to issue a single round-trip.
-    async fn find_missing(
-        &self,
-        digests: &[crate::types::DigestInfo],
-    ) -> CasResult<Vec<crate::types::DigestInfo>> {
+    /// The subset of `digests` that is not stored, in input order.
+    async fn find_missing(&self, digests: &[DigestInfo]) -> CasResult<Vec<DigestInfo>> {
         let mut missing = Vec::new();
         for digest in digests {
             if !self.contains(digest).await? {
@@ -85,14 +71,11 @@ pub trait CasBackend: Send + Sync + 'static {
         Ok(missing)
     }
 
-    /// Read multiple blobs in a single backend call.
-    ///
-    /// Backends that support batched reads (e.g. gRPC CAS)
-    /// should override this default to issue a single round-trip.
+    /// Each digest paired with its blob, or `None` where it is not stored.
     async fn batch_read(
         &self,
-        digests: &[crate::types::DigestInfo],
-    ) -> CasResult<Vec<(crate::types::DigestInfo, Option<Bytes>)>> {
+        digests: &[DigestInfo],
+    ) -> CasResult<Vec<(DigestInfo, Option<Bytes>)>> {
         let mut results = Vec::with_capacity(digests.len());
         for digest in digests {
             let data = self.read(digest).await?;
@@ -101,14 +84,11 @@ pub trait CasBackend: Send + Sync + 'static {
         Ok(results)
     }
 
-    /// Write multiple blobs in a single backend call.
-    ///
-    /// Backends that support batched writes (e.g. gRPC CAS)
-    /// should override this default to issue a single round-trip.
+    /// Stores every item and reports the outcome of each one separately.
     async fn batch_write(
         &self,
-        items: &[(crate::types::DigestInfo, Bytes)],
-    ) -> CasResult<Vec<(crate::types::DigestInfo, CasResult<()>)>> {
+        items: &[(DigestInfo, Bytes)],
+    ) -> CasResult<Vec<(DigestInfo, CasResult<()>)>> {
         let mut results = Vec::with_capacity(items.len());
         for (digest, data) in items {
             let result = self.write(digest, data.clone()).await;
@@ -117,23 +97,24 @@ pub trait CasBackend: Send + Sync + 'static {
         Ok(results)
     }
 
-    /// Delete a blob from storage
-    ///
-    /// Returns `Ok(())` even if the blob doesn't exist (idempotent).
-    async fn delete(&self, digest: &crate::types::DigestInfo) -> CasResult<()>;
+    /// Removes the blob. Removing a blob that is not stored succeeds.
+    async fn delete(&self, digest: &DigestInfo) -> CasResult<()>;
 
-    /// Get the local filesystem path for a blob (if available)
-    ///
-    /// This is an optimization for local disk backends that allows
-    /// efficient hardlinking without copying data.
-    ///
-    /// Returns `Ok(None)` if the blob doesn't exist or if the backend
-    /// doesn't support local paths (e.g., S3).
-    async fn local_path(
-        &self,
-        digest: &crate::types::DigestInfo,
-    ) -> CasResult<Option<std::path::PathBuf>>;
+    /// Number of stored blobs, or `0` for backends that do not track it.
+    async fn count_entries(&self) -> u64 {
+        0
+    }
+
+    /// Total bytes stored, or `0` for backends that do not track it.
+    fn size_bytes(&self) -> u64 {
+        0
+    }
+
+    /// The file holding the blob, for backends that store blobs as local
+    /// files; lets callers hardlink instead of copying. `None` when the blob
+    /// is not stored or the backend is not local.
+    async fn local_path(&self, digest: &DigestInfo) -> CasResult<Option<PathBuf>>;
 }
 
-/// Type alias for a shared CAS backend reference
+/// Shared handle to a CAS backend.
 pub type SharedCasBackend = Arc<dyn CasBackend>;

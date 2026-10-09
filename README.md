@@ -1,335 +1,248 @@
 <p align="center">
-  <img src="docs/logo.png" alt="FerrisRBE Logo" width="200"/>
+  <img src="docs/logo.png" alt="FerrisRBE" width="200"/>
 </p>
 
 <h1 align="center">FerrisRBE</h1>
 
 <p align="center">
-  <strong>A lean, predictable, and blazingly fast Remote Build Execution (RBE) server for Bazel, written in Rust.</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/xangcastle/ferrisrbe/actions"><img src="https://img.shields.io/badge/CI-Passing-brightgreen" alt="CI Status"></a>
-  <a href="https://github.com/xangcastle/ferrisrbe/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
-  <a href="https://github.com/bazelbuild/remote-apis"><img src="https://img.shields.io/badge/REAPI-v2.4%20Compliant-blue" alt="REAPI Compliant"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Memory-~50MB%20RSS-orange" alt="Memory"></a>
+  Remote cache, remote execution and build event service for Bazel, in Rust.
 </p>
 
 ---
 
-## Why FerrisRBE?
+FerrisRBE is two binaries:
 
-Most RBE solutions are built on the JVM, requiring constant GC tuning and 4GB+ memory just to idle. When your build cache server needs its own dedicated node, something is wrong.
+- **`server`** serves the Remote Execution API v2 (CAS, Action Cache,
+  ByteStream, Execution, Capabilities), the Remote Asset API, the Build Event
+  Service with a web UI, a pull-through download proxy, an MCP endpoint over
+  the build data, and Prometheus metrics.
+- **`worker`** runs the actions the server schedules. Workers connect to the
+  server, so they can scale in and out without any registration step.
 
-**FerrisRBE takes a different approach:**
-
-* **Zero GC Pauses:** Rust's ownership model eliminates garbage collection. Predictable p99 latencies without JVM tuning.
-* **O(1) Memory CAS Streaming:** Stream 10GB artifacts with constant ~50MB RAM usage. No more OOM kills during large uploads.
-* **12-Factor by Default:** No XML, no YAML, no properties files. Just environment variables that operators already know how to manage.
-* **Adaptive Resilience:** Workers auto-tune keepalive intervals based on network conditions. Transient failures don't fail builds.
-
-## 🚀 Quick Start
-
-### Option 1: Podman Compose (Full RBE - Local)
-
-Complete RBE stack with workers, cache, BES, and execution on your machine.
+Both ship as multi-platform images (`linux/amd64`, `linux/arm64`):
 
 ```bash
-git clone https://github.com/xangcastle/ferrisrbe.git
-cd ferrisrbe
-
-# Build and load images with Bazel
-bazel run //oci:server.amd64.image.load
-bazel run //oci:worker.amd64.image.load
-bazel run //oci:cache.amd64.image.load
-bazel run //oci:bes.amd64.image.load
-
-# Start the stack with Podman Compose
-podman-compose -f podman-compose.yml up -d
-
-# Verify the containers are running and healthy
-curl -I http://localhost:9092 || echo "Server is up"
-curl -I http://localhost:9096 || echo "BES UI is up"
-
-# Configure Bazel
-echo 'build:remote --remote_cache=grpc://localhost:9094' >> ~/.bazelrc
-echo 'build:remote --remote_upload_local_results=true' >> ~/.bazelrc
-echo 'build:remote --remote_executor=grpc://localhost:9092' >> ~/.bazelrc
-echo 'build:remote --remote_default_exec_properties=OSFamily=linux' >> ~/.bazelrc
-bazel build --config=remote //...
+docker pull docker.io/xangcastle/ferris-server:latest
+docker pull docker.io/xangcastle/ferris-worker:latest
 ```
 
-### Option 2: Kubernetes (Production)
+A third binary, `rbe-cli`, gives a laptop authenticated access to a server
+inside a Kubernetes cluster (see [Authentication](#authentication)).
+
+## Quick start
+
+`podman-compose.yml` starts a server, one worker, Prometheus and Grafana:
 
 ```bash
-# Create namespace
-kubectl create namespace rbe
-
-# Helm install from local chart
-helm install ferrisrbe ./charts/ferrisrbe \
-  --namespace rbe --create-namespace
-
-# Or with NodePort for local testing
-helm install ferrisrbe ./charts/ferrisrbe \
-  --namespace rbe --create-namespace \
-  --set server.service.type=NodePort \
-  --set server.service.nodePort=30092 \
-  --set cache.service.type=NodePort \
-  --set cache.service.nodePortGrpc=30094 \
-  --set bes.service.type=NodePort \
-  --set bes.service.nodePortUi=30096
+podman-compose up -d        # or: docker compose -f podman-compose.yml up -d
 ```
 
-For advanced deployments requiring extensive configuration, [view the direct Helm deployment values.yaml](https://github.com/xangcastle/ferrisrbe/blob/main/charts/ferrisrbe/values.yaml).
+| Port   | What                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------- |
+| `9094` | gRPC: REAPI, Remote Asset, BES and the worker stream                                        |
+| `8080` | HTTP: web UI, BES REST API (`/api`), download proxy (`/proxy`), `/mcp`, `/metrics`, probes  |
+| `9090` | Prometheus                                                                                  |
+| `3000` | Grafana (`admin`/`admin`), with the FerrisRBE dashboard                                     |
 
-## Architecture Highlights
-
-FerrisRBE isn't a toy implementation; it's designed to handle the thundering herd of a massive monorepo CI pipeline.
-
-* **Multi-Level Queuing:** Fast, medium, and slow queues automatically determined by action size. No more head-of-line blocking. Fast actions (<1s) never wait behind slow ones (>10s).
-* **Lock-Free Concurrency:** Leveraging `DashMap` with 64 shards for L1 action cache and in-flight operations, ensuring high throughput without lock contention. Action cache reads in microseconds, not milliseconds.
-* **Event-Driven Workers:** Eliminates busy-waiting CPU cycles using `tokio::sync::Notify`. Your cluster's CPU is for building, not polling.
-* **Smart Materialization:** Automatically degrades from zero-copy hardlinks to standard copies on `EXDEV` cross-device volume mounts (perfect for containerized executors).
-* **Zero-GC Runtime:** Rust's ownership model eliminates garbage collection pauses. Predictable p99 latencies under any load.
-
-### Cache Architecture (L1/L2)
-
-FerrisRBE implements a tiered caching strategy:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  L1 Cache: DashMap (in-memory)                              │
-│  - 64 shards, lock-free concurrent access                   │
-│  - Microsecond-level reads (~50-100μs)                      │
-│  - Lost on server restart                                   │
-├─────────────────────────────────────────────────────────────┤
-│  L2 Cache: rbe-cache DiskActionCache                        │
-│  - Persistent across restarts                               │
-│  - Shared across server replicas                            │
-│  - Millisecond-level reads (~1-3ms)                         │
-├─────────────────────────────────────────────────────────────┤
-│  L3 Storage: CAS (rbe-cache)                                │
-│  - Persistent blob storage                                  │
-│  - Gigabyte-scale artifacts                                 │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Current Status:** L1 (DashMap) is implemented and provides exceptional performance for action cache hits. L2 integration is planned to provide persistence and horizontal scalability.
-
-## 📊 Benchmarks
-
-The following metrics were obtained through reproducible comparative benchmarks against other RBE solutions (Buildfarm, Buildbarn, BuildBuddy). Benchmark scripts are available in [`benchmark/`](benchmark/).
-
-### Memory Footprint Comparison (Idle State)
-
-| Solution | Language | Idle Memory | Relative to FerrisRBE | GC Pauses |
-|----------|----------|-------------|----------------------|-----------|
-| **FerrisRBE** 🦀 | Rust | **6.7 MB** | **1x** (baseline) | **None** ✅ |
-| Buildbarn | Go | ~120-200 MB | ~18-30x | Minimal |
-| Buildfarm | Java | ~800-1200 MB | ~120-180x | Yes (G1GC) ⚠️ |
-| BuildBuddy | Java/Go | ~1.2-2 GB | ~180-300x | Yes (JVM) ⚠️ |
-
-> **Note:** FerrisRBE is **120-300x more memory efficient** than JVM-based solutions, and **18-30x more efficient** than Go.
-
-### Real-World Impact: Resource Costs
-
-For a 20-node RBE cluster:
-
-| Solution | Total Memory (Idle) | Est. Monthly Cost* |
-|----------|---------------------|-------------------|
-| **FerrisRBE** | ~134 MB | **$50-100** |
-| Buildbarn | ~2.4-4 GB | $150-250 |
-| Buildfarm | ~16-24 GB | $800-1,200 |
-| BuildBuddy | ~24-40 GB | $1,200-2,000 |
-
-\*AWS/GCP estimate for instances required to support baseline memory.
-
-### Resource Footprint - FerrisRBE Details
-
-| Component | Memory (Idle) | Memory (Peak) | CPU (Idle) |
-|-----------|---------------|---------------|------------|
-| Server | ~5-10 MB | ~50-150 MB | ~0.01 cores |
-| Worker | ~10-15 MB | ~100-200 MB | ~0.01 cores |
-| **Total** | **~15-25 MB** | **~150-350 MB** | **~0.02 cores** |
-
-Compare to Java-based alternatives that idle at 500MB+ and spike to 4GB+ during GC.
-
-### Why Zero-GC Matters
-
-| Metric | FerrisRBE | JVM Solutions |
-|--------|-----------|---------------|
-| p50 Latency | 12 ms | 45 ms |
-| p99 Latency | 18 ms | 180-500 ms* |
-| p99.9 Latency | 25 ms | 500-2000 ms* |
-| Large File Streaming | O(1) memory | O(n) memory, OOM risk |
-| Connection Cleanup | Immediate | Delayed (zombie threads) |
-| Cache Stampede | Coalesced | Backend overload |
-| Consistency | ✅ High | ⚠️ Variable |
-
-\* Latency spikes caused by GC pauses
-
-### Advanced Stress Tests
-
-| Test | FerrisRBE | JVM Solutions |
-|------|-----------|---------------|
-| **O(1) Streaming** | Constant memory regardless of file size | Memory scales with file size |
-| **Connection Churn** | Immediate task cancellation | Zombie threads, resource leaks |
-| **Cache Stampede** | Request coalescing prevents overload | Backend overwhelmed |
-| **Multi-level Scheduling** | Fast actions never blocked | Head-of-line blocking (FIFO) |
-
-### Running Benchmarks
-
-The benchmark suite tests eight critical dimensions of RBE performance:
+Point Bazel at it from any workspace:
 
 ```bash
-cd benchmark
+# .bazelrc
+build:ferris --remote_cache=grpc://localhost:9094
+build:ferris --bes_backend=grpc://localhost:9094
+build:ferris --bes_results_url=http://localhost:8080/builds/
 
-# 1. Memory footprint (baseline)
-./scripts/benchmark.sh
-
-# 2. Execution API throughput (Zero-GC advantage)
-./scripts/execution-load-test.py --actions 1000 --concurrent 50
-
-# 3. Action Cache performance (L1 DashMap + L2 disk-backed)
-./scripts/action-cache-test.py --operations 10000 --concurrent 100
-
-# 4. Multi-level scheduler (no head-of-line blocking)
-./scripts/noisy-neighbor-test.py --slow 10 --fast 50
-
-# 5. O(1) Streaming (constant memory with large files)
-./scripts/o1-streaming-test.py --large-sizes 5 10 --small-count 1000
-
-# 6. Connection churn (resource cleanup)
-./scripts/connection-churn-test.py --connections 1000 --disconnect-rate 0.3
-
-# 7. Cache stampede (thundering herd protection)
-./scripts/cache-stampede-test.py --requests 10000 --concurrent 100
-
-# 8. Cold start time (<100ms vs 5-30s JVM)
-./scripts/cold-start-test.sh
+# Remote execution on the compose worker: the workspace needs an execution
+# platform for Linux on the worker's CPU.
+build:ferris-rbe --config=ferris
+build:ferris-rbe --remote_executor=grpc://localhost:9094
+build:ferris-rbe --extra_execution_platforms=//platforms:linux_rbe
 ```
 
-See [benchmark/README.md](benchmark/README.md) for detailed benchmark documentation and [benchmark/results/BENCHMARK_RESULTS.md](benchmark/results/BENCHMARK_RESULTS.md) for results.
+```starlark
+# platforms/BUILD.bazel
+platform(
+    name = "linux_rbe",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",  # x86_64 on an amd64 host
+    ],
+    exec_properties = {"OSFamily": "linux"},
+)
+```
 
-## Quick Start
+The worker runs actions in its own image (Debian bookworm slim), so tools
+the actions call must come from the build itself or from that image.
 
-### 1. Configure Bazel
+## Features
 
-Add to your `.bazelrc`:
+### Cache
+
+- **CAS and Action Cache on disk**, with LRU eviction under
+  `RBE_CACHE_MAX_SIZE_GB` and `RBE_CACHE_AC_MAX_SIZE_GB`. Writes are verified
+  against their digest and published atomically; the index is rebuilt in the
+  background at startup, behind `/readyz`.
+- **S3 tier.** With `RBE_CAS_S3_BUCKET`, the disk sits in front of an S3
+  bucket for both the CAS and the Action Cache: writes reach both, reads come
+  from disk and fall back to S3, and a server on an empty disk keeps every
+  blob and result written since the tier was enabled. Credentials follow the
+  standard AWS environment (`AWS_REGION`, IRSA, `AWS_ACCESS_KEY_ID`, ...).
+- **Hits are checked.** An Action Cache entry is served only while every
+  blob it references is still in the CAS; otherwise it is dropped and the
+  action runs again.
+
+### Execution
+
+- **Scheduling** by platform: `OSFamily`, `ISA` and `Pool` select workers by
+  label, `Priority=critical` jumps the queue, and `ExecutionPolicy.priority`
+  is honored with fair queuing across invocations.
+- **Identical actions in flight are joined**, not run twice.
+- **Workers** materialize inputs from a local blob cache (reflinks or hard
+  links when the filesystem allows), run each action with exactly its
+  environment and timeout, and upload outputs whatever the exit code.
+- **Network per action.** The `Network` platform property (`on`/`off`), or
+  else the worker's `RBE_WORKER_NETWORK` (default `on`). `off` runs the
+  action in a network namespace of its own with only loopback.
+- **Draining.** On `SIGTERM` a worker stops taking work and finishes what it
+  holds; the server requeues what a lost worker was running.
+
+[`docs/reapi.md`](docs/reapi.md) lists what the server implements of each API
+and how it behaves where the spec leaves the choice open.
+
+### Build Event Service and web UI
+
+Bazel's `--bes_backend` streams every build to the server, which keeps the
+events, summarizes each invocation and serves them at `:8080`: builds live
+as they run, targets and tests with their history, cache misses per target,
+the critical path from the profile, action logs, workers, and the external
+downloads. Secrets in a build's command line are redacted before anything is
+stored: values of variables whose name looks like a secret, and passwords or
+tokens in URLs.
+
+### Download proxy
+
+A pull-through cache in front of the hosts builds download from (GitHub,
+Maven Central, PyPI, npm, the Bazel Central Registry, ...), so a fleet of
+ephemeral CI runners pays for each artifact once:
+
+- `http://<server>:8080/proxy/<host>/<path>`, for Bazel's
+  `--experimental_downloader_config` and for `HTTP_PROXY`-style clients;
+- the Remote Asset API on `:9094`, for `--experimental_remote_downloader`,
+  which places the artifact in the CAS and returns only its digest.
+
+Concurrent requests for the same URL are coalesced. `RBE_PROXY_ALLOWED_HOSTS`
+restricts the upstreams; loopback, link-local and private addresses are
+always refused.
+
+### MCP
+
+`/mcp` exposes the build data to MCP clients as read-only tools: builds, logs,
+events, profiles, cache misses, targets, tests, workers, CAS blobs, metrics
+and PromQL over `RBE_PROMETHEUS_URL`. See [`docs/mcp.md`](docs/mcp.md).
+
+### Observability
+
+`/metrics` exports Prometheus metrics for every gRPC method, the CAS and
+Action Cache, the execution queue and its phases, the connected workers and
+their slots, the download proxy and the BES. [`grafana/`](grafana/) holds the dashboard
+the compose file provisions.
+
+## Authentication
+
+Off by default. Two switches, one per surface:
+
+- `RBE_AUTH_ENABLED=true` protects `/api` and `/mcp`. The UI then logs in
+  with Keycloak (`RBE_KEYCLOAK_URL`, `RBE_KEYCLOAK_REALM`,
+  `RBE_KEYCLOAK_UI_CLIENT`); probes, metrics and the download proxy stay
+  open.
+- `RBE_GRPC_AUTH_ENABLED=true` protects every gRPC service except health
+  checks. Bazel presents the token through `--credential_helper`.
+
+Both accept a JWT of the Keycloak realm (restricted to the clients in
+`RBE_AUTH_ALLOWED_CLIENTS` when set) or one of `RBE_AUTH_STATIC_TOKENS`, for
+CI and other headless clients. Workers present `RBE_WORKER_TOKEN`.
+
+`rbe-cli` covers the laptop side:
 
 ```bash
-# Remote Cache (works from any OS)
-build:remote-cache --remote_cache=grpc://localhost:9094
-build:remote-cache --remote_upload_local_results=true
-
-# Remote Execution (requires Linux toolchains)
-build:remote-exec --config=remote-cache
-build:remote-exec --remote_executor=grpc://localhost:9092
-build:remote-exec --remote_default_exec_properties=OSFamily=linux
+export RBE_KEYCLOAK_URL=https://keycloak.example.com RBE_KEYCLOAK_REALM=ferris RBE_KEYCLOAK_CLIENT_ID=rbe-cli
+rbe-cli login        # OAuth2 Authorization Code + PKCE, loopback callback
+rbe-cli install      # ~/.rbe/bin/rbe-cli, for tools/rbe_credential_helper
+rbe-cli connect      # kubectl port-forward + local proxy that injects the token
 ```
 
-### 2. Build
-
-```bash
-# Cache only
-bazel build --config=remote-cache //...
-
-# Full remote execution
-bazel build --config=remote-exec //...
-```
-
-### 3. Verify
-
-```bash
-# You should see "remote cache hit" and "remote" execution in the output
-bazel build --config=remote //... 2>&1 | grep -E "(remote cache hit|processes)"
-```
+`connect` serves the HTTP side on `localhost:18080` with the token injected
+and refreshed, and forwards gRPC on `localhost:19094`.
+[`tools/rbe_credential_helper`](tools/rbe_credential_helper) is the Bazel
+credential helper: `RBE_CI_TOKEN` on CI, `rbe-cli` on a laptop.
 
 ## Configuration
 
-FerrisRBE strictly follows 12-Factor App methodology. No cryptic XML or YAML files required.
+Everything is environment variables. The most common ones:
 
-| Env Variable | Default | Description |
-|--------------|---------|-------------|
-| `RBE_PORT` | `9092` | Server listening port |
-| `RBE_L1_CACHE_CAPACITY` | `100000` | Max entries in the in-memory action cache |
-| `RBE_INLINE_OUTPUT_THRESHOLD` | `1048576` | Size (bytes) below which outputs are sent inline |
-| `RBE_MAX_CONCURRENT_DOWNLOADS` | `10` | Concurrency limit for materializing execroots |
+**Server**
 
-See [docs/configuration.md](docs/configuration.md) for the complete reference.
+| Variable                                     | Default        | Meaning                                                 |
+| -------------------------------------------- | -------------- | ------------------------------------------------------- |
+| `RBE_PORT` / `RBE_HTTP_PORT`                 | `9094` / `8080`| gRPC and HTTP ports                                     |
+| `RBE_CACHE_DIR`                              | `/data`        | CAS, Action Cache, BES and proxy data                   |
+| `RBE_CACHE_MAX_SIZE_GB`                      | `100`          | CAS size on disk                                        |
+| `RBE_CACHE_AC_MAX_SIZE_GB`                   | `10`           | Action Cache size on disk                               |
+| `RBE_CAS_S3_BUCKET` / `RBE_CAS_S3_PREFIX`    | unset          | S3 tier behind the disk                                 |
+| `RBE_BES_MAX_RETENTION_DAYS`                 | unset (forever)| Age after which builds are deleted                      |
+| `RBE_PROXY_ENABLED`                          | `true`         | Download proxy and Remote Asset API                     |
+| `RBE_PROXY_ALLOWED_HOSTS`                    | any public host| Upstreams the proxy may contact, comma-separated        |
+| `RBE_DEFAULT_ACTION_TIMEOUT_SECS`            | `1800`         | Timeout of an action that sets none                     |
+| `RBE_EXTRA_PLATFORM_PROPERTIES`              | unset          | Extra platform properties matched verbatim on labels    |
+| `RBE_TLS_CERT` / `RBE_TLS_KEY`               | unset          | TLS for the gRPC port (PEM contents, not paths)         |
+| `RBE_PROMETHEUS_URL`                         | unset          | Prometheus behind the `rbe_prometheus` MCP tool         |
 
-## Documentation
+**Worker**
 
-- [Architecture](docs/architecture.md) - System design and components
-- [Deployment](docs/deployment.md) - Kubernetes, Helm, and Docker deployment
-- [Configuration](docs/configuration.md) - Environment variables and tuning
-- [Bazel Integration](docs/bazel-integration.md) - `.bazelrc` configuration
-- [API Reference](docs/api.md) - REAPI v2.4 endpoints
-- [Monitoring](docs/monitoring.md) - Metrics and logging
-- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+| Variable                           | Default                      | Meaning                                         |
+| ---------------------------------- | ---------------------------- | ----------------------------------------------- |
+| `SERVER_ENDPOINT` / `CAS_ENDPOINT` | `http://server:9094`         | The server                                      |
+| `MAX_CONCURRENT`                   | `4`                          | Actions run at once                             |
+| `WORKER_LABELS`                    | `os=linux,arch=<image arch>` | Labels platforms are matched against            |
+| `WORKDIR`                          | `/workspace`                 | Blob cache and execution directories            |
+| `RBE_WORKER_CACHE_MAX_GB`          | `100`                        | Blob cache size                                 |
+| `RBE_WORKER_NETWORK`               | `on`                         | Network of actions without a `Network` property |
+| `DRAIN_TIMEOUT_SECS`               | `90`                         | Grace period of a `SIGTERM`                     |
 
-## Project Structure
+## Building from source
+
+Bazel builds everything, cross-compiling Linux binaries for both
+architectures from any host with a hermetic Zig C toolchain:
+
+```bash
+bazel build //:server //:worker //:cli
+bazel test //...
+
+# Images, loaded into the local container runtime
+bazel run //oci:server.arm64.image.load
+bazel run //oci:worker.amd64.image.load
+```
+
+[`local/`](local/README.md) runs the server on the host and a worker in
+podman, to reproduce a worker bug before deploying anything.
+[`conformance/`](conformance/README.md) runs the clients of
+remote-apis-testing (Bazel, recc) against it.
+
+## Layout
 
 ```
-ferrisrbe/
-├── src/
-│   ├── server/          # gRPC services (REAPI v2.4)
-│   ├── execution/       # Scheduler, state machine, results
-│   ├── worker/          # Worker registry and management
-│   ├── cas/             # Content Addressable Storage backends
-│   └── cache/           # L1 Action Cache (DashMap)
-├── charts/              # Helm charts for Kubernetes
-├── k8s/                 # Raw Kubernetes manifests
-├── examples/            # Test projects (Bazel 7.4, 8.x, 9.x)
-└── docs/                # Full documentation
+src/            server (main.rs), worker (bin/), rbe-cli (cli/) and the shared library
+proto/          REAPI, Remote Asset, BES and worker protocol definitions
+ui/             web UI (React), embedded into the server binary
+oci/            container images and their push targets
+docs/           REAPI behavior and MCP setup
+local/          local server + podman worker
+conformance/    remote-apis-testing clients against FerrisRBE
+grafana/        dashboard and provisioning
+tools/          formatting, clippy aspect, Bazel credential helper
+tests/          end-to-end tests over real server and worker processes
 ```
-
-## Roadmap
-
-### Completed ✅
-
-- [x] REAPI v2.4 Capabilities Service
-- [x] Action merging (deduplication of identical in-flight actions)
-- [x] HTTP/2 adaptive keepalive for resilient worker connections
-- [x] Multi-level scheduler (Fast/Medium/Slow queues)
-- [x] DashMap-based L1 Action Cache (lock-free, 64 shards)
-- [x] O(1) CAS streaming with async I/O
-- [x] Comprehensive benchmark suite (8 dimensions)
-
-### In Progress 🚧
-
-- [x] Persistent L2 Cache (disk-backed ActionCache in rbe-cache)
-  - *Implemented: DiskActionCache provides persistence across server restarts and cache sharing across multiple server replicas.*
-- [ ] Prometheus / OpenTelemetry metrics exposition
-  - *Why: Production observability for SRE teams*
-
-### Planned 📋
-
-- [ ] Web UI for build monitoring
-  - Real-time build queue visualization
-  - Worker status and health
-  - Cache hit/miss analytics
-- [ ] Remote Build Without the Bytes (BwoB) support
-  - Skip downloading outputs when not needed
-- [ ] Compressed CAS transfers (zstd)
-  - Reduce network bandwidth for large artifacts
-
-## Contributing
-
-PRs are welcome. We value:
-- Clean abstractions
-- Explicit error handling
-- Comprehensive documentation
-- Avoiding `unwrap()` in critical paths
-
-See [docs/project-structure.md](docs/project-structure.md) for codebase orientation.
 
 ## License
 
 [MIT](LICENSE)
-
----
-
-<p align="center">
-  Built with 🦀 for engineers who value predictability.
-</p>

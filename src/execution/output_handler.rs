@@ -1,9 +1,10 @@
-//! Output Handler - Manages execution output storage
+//! Placement of an action's stdout and stderr, as REAPI prescribes.
 //!
-//! Implements REAPI-compliant output handling:
-//! - Small outputs (< INLINE_THRESHOLD) are sent inline in gRPC response
-//! - Large outputs (>= INLINE_THRESHOLD) are stored in CAS, only digest is returned
-//! - This prevents OOM errors when builds generate large logs
+//! - Outputs below [`inline_output_threshold`] travel inline in the response.
+//! - Larger outputs are written to the CAS and only their digest is returned,
+//!   which keeps response size and server memory bounded regardless of how
+//!   much an action prints.
+//! - Outputs above [`max_capture_size`] are truncated to that size first.
 
 use bytes::Bytes;
 use tracing::{debug, info, warn};
@@ -12,16 +13,13 @@ use crate::cas::{CasBackend, CasError};
 use crate::types::DigestInfo;
 use std::sync::Arc;
 
-/// Environment variable for inline output threshold (bytes)
-/// Outputs smaller than this go directly in the gRPC response
-/// Outputs larger than this are stored in CAS
+/// Environment variable overriding [`inline_output_threshold`], in bytes.
 pub const ENV_INLINE_OUTPUT_THRESHOLD: &str = "RBE_INLINE_OUTPUT_THRESHOLD";
 
-/// Environment variable for max capture size (bytes)
-/// Outputs larger than this are truncated with a warning message
+/// Environment variable overriding [`max_capture_size`], in bytes.
 pub const ENV_MAX_CAPTURE_SIZE: &str = "RBE_MAX_CAPTURE_SIZE";
 
-/// Gets the inline output threshold from env or default (1MB)
+/// Size in bytes below which an output is returned inline. Default 1 MiB.
 pub fn inline_output_threshold() -> usize {
     std::env::var(ENV_INLINE_OUTPUT_THRESHOLD)
         .ok()
@@ -29,7 +27,7 @@ pub fn inline_output_threshold() -> usize {
         .unwrap_or(1024 * 1024)
 }
 
-/// Gets the max capture size from env or default (100MB)
+/// Size in bytes beyond which an output is truncated. Default 100 MiB.
 pub fn max_capture_size() -> usize {
     std::env::var(ENV_MAX_CAPTURE_SIZE)
         .ok()
@@ -37,20 +35,20 @@ pub fn max_capture_size() -> usize {
         .unwrap_or(100 * 1024 * 1024)
 }
 
-/// Result of output processing
+/// Where an output ended up.
+///
+/// Inline outputs carry `raw` only; CAS outputs carry `digest` only; a
+/// truncated output carries both the truncated bytes (with a trailing notice)
+/// and the digest of those bytes without the notice.
 #[derive(Debug, Clone)]
 pub struct OutputResult {
-    /// Raw data (only if inline)
     pub raw: Option<Vec<u8>>,
-    /// Digest in CAS (only if stored in CAS)
     pub digest: Option<DigestInfo>,
-    /// Whether the output was truncated
     #[allow(dead_code)]
     pub truncated: bool,
 }
 
 impl OutputResult {
-    /// Create inline output result
     pub fn inline(data: Vec<u8>) -> Self {
         Self {
             raw: Some(data),
@@ -59,7 +57,6 @@ impl OutputResult {
         }
     }
 
-    /// Create CAS-stored output result
     pub fn stored(digest: DigestInfo) -> Self {
         Self {
             raw: None,
@@ -68,7 +65,6 @@ impl OutputResult {
         }
     }
 
-    /// Create truncated output result
     pub fn truncated(raw: Vec<u8>, digest: Option<DigestInfo>) -> Self {
         Self {
             raw: Some(raw),
@@ -77,24 +73,24 @@ impl OutputResult {
         }
     }
 
-    /// Check if this output is inline
+    /// Whether the bytes are carried inline and nothing was stored.
     pub fn is_inline(&self) -> bool {
         self.raw.is_some() && self.digest.is_none()
     }
 
-    /// Check if this output is stored in CAS
+    /// Whether the output (or its truncated prefix) is in the CAS.
     pub fn is_stored(&self) -> bool {
         self.digest.is_some()
     }
 
-    /// Get size of output
+    /// Length of the inline bytes; `0` for CAS-only outputs.
     #[allow(dead_code)]
     pub fn size(&self) -> usize {
         self.raw.as_ref().map(|r| r.len()).unwrap_or(0)
     }
 }
 
-/// Handles output processing and storage decisions
+/// Decides, per output, between inline delivery and CAS storage.
 #[derive(Clone)]
 pub struct OutputHandler {
     cas_backend: Arc<dyn CasBackend>,
@@ -105,14 +101,12 @@ impl OutputHandler {
         Self { cas_backend }
     }
 
-    /// Process output data and decide storage method
+    /// Places `data`, labelled `name` (e.g. `"stdout"`) in logs, inline or in
+    /// the CAS according to the thresholds above.
     ///
-    /// # Arguments
-    /// * `name` - Name of the output (e.g., "stdout", "stderr")
-    /// * `data` - Raw output data
+    /// # Errors
     ///
-    /// # Returns
-    /// * `OutputResult` containing either inline data or CAS digest
+    /// Propagates CAS failures when the output has to be stored.
     pub async fn process_output(
         &self,
         name: &str,
@@ -151,7 +145,7 @@ impl OutputHandler {
         self.store_in_cas(name, data).await
     }
 
-    /// Store output in CAS and return digest
+    /// Writes `data` to the CAS unless it is already there.
     async fn store_in_cas(&self, name: &str, data: Vec<u8>) -> Result<OutputResult, CasError> {
         let digest = DigestInfo::from_bytes(&data);
         let size = data.len();
@@ -180,7 +174,8 @@ impl OutputHandler {
         Ok(OutputResult::stored(digest))
     }
 
-    /// Truncate data and optionally store in CAS
+    /// Keeps the first `max_size` bytes, stores them in the CAS and returns
+    /// them inline followed by a truncation notice.
     async fn truncate_and_store(
         &self,
         name: &str,
@@ -190,7 +185,7 @@ impl OutputHandler {
         let truncated_data: Vec<u8> = data[..max_size].to_vec();
         let truncation_msg = format!(
             "\n[Output truncated: exceeded maximum size of {} bytes]\n",
-            max_capture_size()
+            max_size
         );
 
         let digest = DigestInfo::from_bytes(&truncated_data);
@@ -213,13 +208,9 @@ impl OutputHandler {
         Ok(OutputResult::truncated(result, Some(digest)))
     }
 
-    /// Retrieve output data
-    ///
-    /// # Arguments
-    /// * `result` - OutputResult containing either inline data or digest
-    ///
-    /// # Returns
-    /// * Raw output data
+    /// The bytes of `result`: the inline data if present, otherwise the CAS
+    /// blob. A blob missing from the CAS yields a placeholder message instead
+    /// of an error, so a reader always gets something printable.
     #[allow(dead_code)]
     pub async fn retrieve_output(&self, result: &OutputResult) -> Result<Vec<u8>, CasError> {
         if let Some(ref data) = result.raw {
@@ -257,7 +248,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn test_small_output_inline() {
+    async fn small_output_is_returned_inline() {
         let temp_dir = TempDir::new().unwrap();
         let backend = Arc::new(DiskBackend::new(temp_dir.path()).await.unwrap());
         let handler = OutputHandler::new(backend);
@@ -275,7 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_empty_output() {
+    async fn empty_output_is_returned_inline() {
         let temp_dir = TempDir::new().unwrap();
         let backend = Arc::new(DiskBackend::new(temp_dir.path()).await.unwrap());
         let handler = OutputHandler::new(backend);
@@ -288,7 +279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retrieve_inline() {
+    async fn inline_output_is_retrieved_as_is() {
         let temp_dir = TempDir::new().unwrap();
         let backend = Arc::new(DiskBackend::new(temp_dir.path()).await.unwrap());
         let handler = OutputHandler::new(backend);

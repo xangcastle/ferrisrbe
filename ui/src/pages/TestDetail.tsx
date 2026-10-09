@@ -1,129 +1,228 @@
-import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { getTestHistory } from '../api/bes';
-import type { TestExecution } from '../types';
+import { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+  ArrowLeftIcon,
+  CheckCircle2Icon,
+  ClockIcon,
+  DatabaseIcon,
+  FlaskConicalIcon,
+  HistoryIcon,
+  RepeatIcon,
+} from "lucide-react";
+import { cn } from "cn";
+import { getTestHistory } from "@/api/bes";
+import StatusBadge from "@/components/StatusBadge";
+import { EmptyState, PageHeader, Stat } from "@/components/page";
+import { formatDuration, formatPercent, timeAgo } from "@/lib/format";
+import type { TestExecution } from "@/types";
+import { Badge } from "@/shadcn/ui/badge";
+import { Button } from "@/shadcn/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/shadcn/ui/card";
+import { Skeleton } from "@/shadcn/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/shadcn/ui/table";
 
-function formatTime(iso?: string) {
-  if (!iso) return '-';
-  return new Date(iso).toLocaleString();
+const STRIP_RUNS = 60;
+
+function stripColor(status: string) {
+  if (status === "PASSED") return "bg-success";
+  if (status === "FLAKY") return "bg-warning";
+  if (status === "NO_STATUS") return "bg-muted-foreground/40";
+  return "bg-destructive";
 }
 
-function statusClass(status: string) {
-  switch (status) {
-    case 'PASSED':
-      return 'bg-green-100 text-green-800';
-    case 'FAILED':
-    case 'TIMEOUT':
-    case 'INCOMPLETE':
-    case 'REMOTE_FAILURE':
-    case 'FAILED_TO_BUILD':
-    case 'TOOL_HALTED_BEFORE_TESTING':
-      return 'bg-red-100 text-red-800';
-    case 'FLAKY':
-      return 'bg-yellow-100 text-yellow-800';
-    default:
-      return 'bg-gray-100 text-gray-800';
-  }
+/** One tick per run, oldest on the left: a test's health at a glance. */
+function RunStrip({ history }: { history: TestExecution[] }) {
+  const runs = history.slice(-STRIP_RUNS);
+  return (
+    <div className="flex h-8 items-stretch gap-0.5">
+      {runs.map((ex, i) => (
+        <Link
+          key={`${ex.invocation_id}-${i}`}
+          to={`/builds/${encodeURIComponent(ex.invocation_id)}`}
+          title={`${ex.status} · ${formatDuration(ex.duration_ms)} · ${ex.start_time ? new Date(ex.start_time).toLocaleString() : ""}`}
+          className={cn(
+            "max-w-3 flex-1 rounded-sm opacity-80 transition-opacity hover:opacity-100",
+            stripColor(ex.status),
+          )}
+        />
+      ))}
+    </div>
+  );
 }
 
 export default function TestDetail() {
-  const { label } = useParams<{ label: string }>();
+  const { label = "" } = useParams<{ label: string }>();
   const [history, setHistory] = useState<TestExecution[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function load() {
-      if (!label) return;
-      try {
-        setLoading(true);
-        const data = await getTestHistory(label);
-        setHistory(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load test history');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+    let cancelled = false;
+    setLoading(true);
+    getTestHistory(label)
+      .then((data) => !cancelled && setHistory(data))
+      .catch(
+        (err) =>
+          !cancelled &&
+          setError(
+            err instanceof Error ? err.message : "Failed to load history",
+          ),
+      )
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, [label]);
 
-  if (loading) return <p className="text-gray-600">Loading test history...</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  const summary = useMemo(() => {
+    const passed = history.filter((h) => h.status === "PASSED").length;
+    const cached = history.filter(
+      (h) => h.cached_locally || h.cached_remotely,
+    ).length;
+    const ran = history.filter(
+      (h) => !h.cached_locally && !h.cached_remotely && h.duration_ms > 0,
+    );
+    return {
+      passRate: history.length ? passed / history.length : null,
+      cached,
+      avg: ran.length
+        ? Math.round(ran.reduce((s, h) => s + h.duration_ms, 0) / ran.length)
+        : null,
+      latest: history[history.length - 1],
+    };
+  }, [history]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Test History</h2>
-          <p className="text-sm text-gray-500 break-all">{label}</p>
-        </div>
-        <Link
-          to="/tests"
-          className="text-sm font-medium text-blue-600 hover:text-blue-800"
-        >
-          &larr; Back to tests
-        </Link>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        icon={FlaskConicalIcon}
+        title={<span className="font-mono text-xl">{label}</span>}
+        description="Results across retained builds"
+      >
+        <Button variant="outline" size="sm" asChild>
+          <Link to="/tests">
+            <ArrowLeftIcon /> Tests
+          </Link>
+        </Button>
+      </PageHeader>
 
-      <div className="overflow-hidden rounded-lg border bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Build
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Status
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Cached
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Start Time
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Duration
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {history.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
-                  No history for this test.
-                </td>
-              </tr>
-            )}
-            {history.map((ex, idx) => (
-              <tr key={idx} className="hover:bg-gray-50">
-                <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                  <Link
-                    to={`/builds/${encodeURIComponent(ex.invocation_id)}`}
-                    className="text-blue-600 hover:text-blue-800"
-                  >
-                    {ex.invocation_id}
-                  </Link>
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass(ex.status)}`}>
-                    {ex.status}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {ex.cached_locally || ex.cached_remotely ? 'Yes' : 'No'}
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {formatTime(ex.start_time)}
-                </td>
-                <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
-                  {ex.duration_ms}ms
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {loading ? (
+        <Skeleton className="h-72 rounded-xl" />
+      ) : error ? (
+        <p className="text-sm text-destructive">{error}</p>
+      ) : history.length === 0 ? (
+        <Card>
+          <EmptyState icon={HistoryIcon} title="No runs for this test">
+            It shows up once a bazel test reports it.
+          </EmptyState>
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Stat
+              icon={RepeatIcon}
+              label="Runs"
+              value={history.length.toLocaleString()}
+            />
+            <Stat
+              icon={CheckCircle2Icon}
+              label="Pass rate"
+              value={formatPercent(summary.passRate)}
+            />
+            <Stat
+              icon={ClockIcon}
+              label="Average run (uncached)"
+              value={formatDuration(summary.avg)}
+            />
+            <Stat
+              icon={DatabaseIcon}
+              label="Served from cache"
+              value={summary.cached.toLocaleString()}
+            />
+          </div>
+
+          <Card className="gap-4">
+            <CardHeader>
+              <CardTitle>Recent runs</CardTitle>
+              <CardDescription>
+                The last {Math.min(history.length, STRIP_RUNS)} results, oldest
+                first; each opens its build. Latest:{" "}
+                {timeAgo(summary.latest?.start_time)}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RunStrip history={history} />
+            </CardContent>
+          </Card>
+
+          <Card className="gap-0 pb-0">
+            <CardHeader className="pb-4">
+              <CardTitle>Runs</CardTitle>
+              <CardDescription>Newest first.</CardDescription>
+            </CardHeader>
+            <CardContent className="px-0">
+              <div className="max-h-[36rem] overflow-auto border-t">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-card">
+                    <TableRow>
+                      <TableHead className="pl-6">Build</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Cache</TableHead>
+                      <TableHead className="text-right">Duration</TableHead>
+                      <TableHead className="pr-6 text-right">Started</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {[...history].reverse().map((ex, i) => (
+                      <TableRow key={`${ex.invocation_id}-${i}`}>
+                        <TableCell className="pl-6">
+                          <Link
+                            to={`/builds/${encodeURIComponent(ex.invocation_id)}`}
+                            className="font-mono text-xs hover:text-primary"
+                          >
+                            {ex.invocation_id.slice(0, 13)}…
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge status={ex.status} />
+                        </TableCell>
+                        <TableCell>
+                          {ex.cached_remotely ? (
+                            <Badge variant="secondary">remote cache</Badge>
+                          ) : ex.cached_locally ? (
+                            <Badge variant="secondary">local cache</Badge>
+                          ) : (
+                            <span className="text-muted-foreground">ran</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatDuration(ex.duration_ms)}
+                        </TableCell>
+                        <TableCell className="pr-6 text-right text-muted-foreground">
+                          {timeAgo(ex.start_time)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

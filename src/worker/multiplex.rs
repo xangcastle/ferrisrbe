@@ -1,3 +1,10 @@
+//! Bazel multiplex persistent workers over the JSON worker protocol.
+//!
+//! A [`PersistentWorker`] keeps one worker process alive and multiplexes
+//! many concurrent [`WorkRequest`]s over its stdin and stdout, one JSON
+//! message per line, matching each [`WorkResponse`] to its request by
+//! `request_id`.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -10,6 +17,14 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
+/// Deadline for a worker to answer one request.
+const RESPONSE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(60);
+
+/// Requests buffered for the worker task before callers wait.
+const REQUEST_QUEUE_DEPTH: usize = 100;
+
+/// A request in Bazel's JSON worker protocol. `request_id` is assigned by
+/// [`PersistentWorker::execute`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkRequest {
     pub arguments: Vec<String>,
@@ -22,6 +37,7 @@ pub struct WorkRequest {
     pub sandbox_dir: Vec<String>,
 }
 
+/// A response in Bazel's JSON worker protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkResponse {
     pub exit_code: i32,
@@ -29,12 +45,13 @@ pub struct WorkResponse {
     pub request_id: u32,
 }
 
-/// Internal request with response channel
+/// A request paired with the channel its response is delivered on.
 struct InternalRequest {
     request: WorkRequest,
     response_tx: oneshot::Sender<WorkResponse>,
 }
 
+/// How to launch workers of one type.
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub command: Vec<String>,
@@ -42,21 +59,33 @@ pub struct WorkerConfig {
     pub worker_type: String,
 }
 
-/// Actor-based PersistentWorker that avoids deadlock by using channels.
+/// One live worker process, owned by a single task.
 ///
-/// CRITICAL FIX: This implementation uses the Actor pattern to prevent deadlock.
-/// - A single task owns the process and its I/O
-/// - Requests are sent via mpsc channel
-/// - Responses are routed back via oneshot channels stored in a HashMap
-/// - tokio::select! multiplexes reading from channel and stdout
+/// Callers never touch the process: requests reach the owning task over a
+/// channel, and the task alternates between writing requests to stdin and
+/// reading responses from stdout, routing each response to the waiting
+/// caller by `request_id`. No lock is held across I/O, so a slow response
+/// never blocks other requests from being sent. When stdout closes, every
+/// pending request is answered with exit code `1` and the process is killed.
 pub struct PersistentWorker {
-    worker_type: String,
     request_tx: mpsc::Sender<InternalRequest>,
     request_counter: AtomicU32,
     _process_handle: tokio::task::JoinHandle<()>,
 }
 
+/// Writes `json` and a newline to the worker and flushes.
+async fn write_request_line(stdin: &mut ChildStdin, json: &str) -> std::io::Result<()> {
+    stdin.write_all(json.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    stdin.flush().await
+}
+
 impl PersistentWorker {
+    /// Launches `config.command` and starts the task that owns it.
+    ///
+    /// # Errors
+    ///
+    /// When the process cannot be spawned or its pipes are unavailable.
     pub async fn spawn(config: WorkerConfig) -> anyhow::Result<Self> {
         let mut cmd = Command::new(&config.command[0]);
         cmd.args(&config.command[1..])
@@ -78,7 +107,7 @@ impl PersistentWorker {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get stdout"))?;
 
-        let (request_tx, mut request_rx) = mpsc::channel::<InternalRequest>(100);
+        let (request_tx, mut request_rx) = mpsc::channel::<InternalRequest>(REQUEST_QUEUE_DEPTH);
 
         let worker_type = config.worker_type.clone();
 
@@ -106,18 +135,8 @@ impl PersistentWorker {
 
                         pending_responses.insert(internal_req.request.request_id, internal_req.response_tx);
 
-                        if let Err(e) = stdin.write_all(json.as_bytes()).await {
-                            error!("Failed to write to worker stdin: {}", e);
-                            pending_responses.remove(&internal_req.request.request_id);
-                            continue;
-                        }
-                        if let Err(e) = stdin.write_all(b"\n").await {
-                            error!("Failed to write newline to worker: {}", e);
-                            pending_responses.remove(&internal_req.request.request_id);
-                            continue;
-                        }
-                        if let Err(e) = stdin.flush().await {
-                            error!("Failed to flush worker stdin: {}", e);
+                        if let Err(e) = write_request_line(&mut stdin, &json).await {
+                            error!("Failed to write request to worker stdin: {}", e);
                             pending_responses.remove(&internal_req.request.request_id);
                             continue;
                         }
@@ -169,15 +188,18 @@ impl PersistentWorker {
         });
 
         Ok(Self {
-            worker_type: config.worker_type,
             request_tx,
             request_counter: AtomicU32::new(0),
             _process_handle: handle,
         })
     }
 
-    /// Send a request and wait for response.
-    /// CRITICAL FIX: This no longer holds a lock during await, preventing deadlock.
+    /// Sends `request` under a fresh `request_id` and waits for its response.
+    ///
+    /// # Errors
+    ///
+    /// When the worker task has exited, or no response arrives within 60
+    /// seconds.
     pub async fn execute(&self, request: WorkRequest) -> anyhow::Result<WorkResponse> {
         let request_id = self.request_counter.fetch_add(1, Ordering::Relaxed);
         let request = WorkRequest {
@@ -197,7 +219,7 @@ impl PersistentWorker {
             .await
             .map_err(|_| anyhow::anyhow!("Worker task died"))?;
 
-        let response = tokio::time::timeout(tokio::time::Duration::from_secs(60), response_rx)
+        let response = tokio::time::timeout(RESPONSE_TIMEOUT, response_rx)
             .await
             .map_err(|_| anyhow::anyhow!("Timeout waiting for response"))?
             .map_err(|_| anyhow::anyhow!("Response channel closed"))?;
@@ -206,9 +228,16 @@ impl PersistentWorker {
     }
 }
 
+/// Pools of [`PersistentWorker`]s by worker type.
 pub struct MultiplexWorkerManager {
     workers: Arc<Mutex<HashMap<String, Vec<Arc<PersistentWorker>>>>>,
     configs: Arc<Mutex<HashMap<String, WorkerConfig>>>,
+}
+
+impl Default for MultiplexWorkerManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MultiplexWorkerManager {
@@ -225,6 +254,11 @@ impl MultiplexWorkerManager {
         info!("Registered multiplex worker type: {}", worker_type);
     }
 
+    /// Starts `count` more workers of a registered type.
+    ///
+    /// # Errors
+    ///
+    /// When the type is not registered or a worker fails to spawn.
     pub async fn spawn_workers(&self, worker_type: &str, count: usize) -> anyhow::Result<()> {
         let configs = self.configs.lock().await;
         let config = configs
@@ -247,6 +281,8 @@ impl MultiplexWorkerManager {
         Ok(())
     }
 
+    /// Runs `request` on a worker of `worker_type`. Every request of a type
+    /// goes to its first worker, which multiplexes them.
     pub async fn execute(
         &self,
         worker_type: &str,
@@ -266,6 +302,7 @@ impl MultiplexWorkerManager {
         worker.execute(request).await
     }
 
+    /// Number of workers per type.
     pub async fn stats(&self) -> HashMap<String, usize> {
         let workers = self.workers.lock().await;
         workers.iter().map(|(k, v)| (k.clone(), v.len())).collect()
@@ -277,9 +314,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_multiplex_worker() {
+    async fn new_manager_has_no_workers() {
         let manager = MultiplexWorkerManager::new();
-
-        let _ = manager.stats().await;
+        assert!(manager.stats().await.is_empty());
     }
 }

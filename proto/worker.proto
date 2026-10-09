@@ -86,6 +86,8 @@ message WorkerHeartbeat {
         IDLE = 0;
         BUSY = 1;
         UNHEALTHY = 2;
+// Recibio SIGTERM: termina lo que tiene y no acepta asignaciones nuevas.
+        DRAINING = 3;
     }
     State state = 3;
     
@@ -144,6 +146,52 @@ message ExecutionResult {
     
 // Timestamp de finalización
     int64 completed_at_ms = 10;
+
+// No vacío cuando la acción no pudo ejecutarse (falla de infraestructura:
+// inputs, spawn, workdir); exit_code no aplica en ese caso.
+    string error = 11;
+
+// El worker mató la acción al vencer su timeout; outputs y stdout parciales.
+    bool timed_out = 12;
+
+// Outputs declarados que son symlinks, sin seguirlos (REAPI output_symlinks).
+    repeated OutputSymlink output_symlinks = 13;
+
+// Cuando ocurrio cada fase en el worker (REAPI ExecutedActionMetadata).
+    PhaseTimestamps timestamps = 14;
+
+// Cuantos archivos y bytes de entrada materializo, y los grupos mas pesados.
+    InputStats input_stats = 15;
+
+// stdout y stderr guardados en el CAS por el worker cuando no caben inline;
+// entonces stdout/stderr van vacios.
+    Digest stdout_digest = 16;
+    Digest stderr_digest = 17;
+}
+
+message InputStats {
+    uint64 files = 1;
+    uint64 bytes = 2;
+    repeated InputGroup groups = 3;
+}
+
+// Paquete npm, repositorio externo o directorio que agrupa entradas.
+message InputGroup {
+    string name = 1;
+    uint64 files = 2;
+    uint64 bytes = 3;
+}
+
+// Milisegundos Unix; 0 cuando la fase no ocurrio (sin input root, accion que no arranco).
+message PhaseTimestamps {
+    int64 worker_start_ms = 1;
+    int64 input_fetch_start_ms = 2;
+    int64 input_fetch_completed_ms = 3;
+    int64 execution_start_ms = 4;
+    int64 execution_completed_ms = 5;
+    int64 output_upload_start_ms = 6;
+    int64 output_upload_completed_ms = 7;
+    int64 worker_completed_ms = 8;
 }
 
 message OutputDigest {
@@ -179,6 +227,12 @@ message OutputDirectory {
     
 // Digest del Tree (contiene la estructura del directorio)
     Digest tree_digest = 2;
+}
+
+// Symlink de salida: path relativo al directorio de trabajo y target tal cual.
+message OutputSymlink {
+    string path = 1;
+    string target = 2;
 }
 
 // Confirmación de registro
@@ -226,6 +280,17 @@ message WorkAssignment {
     
 // Directorio de trabajo relativo al execroot (opcional)
     string working_directory = 9;
+
+// Acceso a red pedido con la propiedad de plataforma Network
+    NetworkAccess network = 10;
+}
+
+enum NetworkAccess {
+// El que tenga configurado el worker (RBE_WORKER_NETWORK)
+    NETWORK_WORKER_DEFAULT = 0;
+// Solo loopback, en un network namespace propio
+    NETWORK_OFF = 1;
+    NETWORK_ON = 2;
 }
 
 message EnvironmentVariable {

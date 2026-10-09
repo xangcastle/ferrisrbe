@@ -1,16 +1,5 @@
 version: 2
 updates:
-  # Rust dependencies
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "rust"
-
-  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -19,11 +8,10 @@ updates:
       - "dependencies"
       - "ci"
 
-  # Docker
-  - package-ecosystem: "docker"
-    directory: "/"
+  - package-ecosystem: "npm"
+    directory: "/ui"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     labels:
       - "dependencies"
-      - "docker"
+      - "ui"

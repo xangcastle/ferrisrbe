@@ -1,110 +1,231 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { getMisses } from '../api/bes';
-import type { ActionExecutedEvent } from '../types';
+import { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+  ArrowLeftIcon,
+  CircleCheckIcon,
+  CpuIcon,
+  SearchXIcon,
+  TargetIcon,
+} from "lucide-react";
+import { getMisses } from "@/api/bes";
+import { EmptyState, PageHeader, SearchInput, Stat } from "@/components/page";
+import { formatPercent } from "@/lib/format";
+import type { TargetCacheMiss } from "@/types";
+import { Badge } from "@/shadcn/ui/badge";
+import { Button } from "@/shadcn/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/shadcn/ui/card";
+import { Skeleton } from "@/shadcn/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/shadcn/ui/table";
+
+const TOP_MNEMONICS = 8;
+
+/** Executed actions per mnemonic, most first, as horizontal bars. */
+function MnemonicBreakdown({ misses }: { misses: TargetCacheMiss[] }) {
+  const rows = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const m of misses)
+      totals.set(m.mnemonic, (totals.get(m.mnemonic) ?? 0) + m.misses);
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, TOP_MNEMONICS);
+  }, [misses]);
+  const max = rows[0]?.[1] ?? 1;
+  return (
+    <div className="space-y-2.5">
+      {rows.map(([mnemonic, count]) => (
+        <div key={mnemonic} className="flex items-center gap-3 text-sm">
+          <span className="w-40 shrink-0 truncate font-mono text-xs">
+            {mnemonic}
+          </span>
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${(count / max) * 100}%` }}
+            />
+          </div>
+          <span className="w-14 shrink-0 text-right tabular-nums">
+            {count.toLocaleString()}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function Misses() {
-  const { id } = useParams<{ id: string }>();
-  const [misses, setMisses] = useState<ActionExecutedEvent[]>([]);
-  const [filter, setFilter] = useState('');
+  const { id = "" } = useParams<{ id: string }>();
+  const [misses, setMisses] = useState<TargetCacheMiss[]>([]);
+  const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!id) return;
-    async function load() {
-      try {
-        setLoading(true);
-        const data = await getMisses(id!);
-        setMisses(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load misses');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+    let cancelled = false;
+    setLoading(true);
+    getMisses(id)
+      .then((data) => !cancelled && setMisses(data))
+      .catch(
+        (err) =>
+          !cancelled &&
+          setError(err instanceof Error ? err.message : "Failed to load"),
+      )
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
-  const filtered = useMemo(() => {
-    const q = filter.toLowerCase();
+  const totals = useMemo(() => {
+    const missed = misses.reduce((s, m) => s + m.misses, 0);
+    const hit = misses.reduce((s, m) => s + m.hits, 0);
+    return {
+      missed,
+      hitRate: missed + hit === 0 ? null : hit / (missed + hit),
+      targets: new Set(misses.map((m) => m.label)).size,
+    };
+  }, [misses]);
+
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
     return misses.filter(
       (m) =>
-        m.label.toLowerCase().includes(q) || m.type.toLowerCase().includes(q)
+        !q ||
+        m.label.toLowerCase().includes(q) ||
+        m.mnemonic.toLowerCase().includes(q),
     );
   }, [misses, filter]);
 
-  if (loading) return <p className="text-gray-600">Loading misses...</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
-
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Cache Misses</h2>
-          <p className="text-sm text-gray-500">Build: {id}</p>
-        </div>
-        <Link
-          to={`/builds/${encodeURIComponent(id!)}`}
-          className="text-sm font-medium text-blue-600 hover:text-blue-800"
-        >
-          &larr; Back to build
-        </Link>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        icon={SearchXIcon}
+        title="Cache misses"
+        description={
+          <>
+            Actions the ActionCache could not serve in build{" "}
+            <span className="font-mono text-xs">{id}</span>
+          </>
+        }
+      >
+        <Button variant="outline" size="sm" asChild>
+          <Link to={`/builds/${encodeURIComponent(id)}`}>
+            <ArrowLeftIcon /> Build
+          </Link>
+        </Button>
+      </PageHeader>
 
-      <input
-        type="text"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-        placeholder="Filter by label or type..."
-        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 sm:w-96"
-      />
+      {loading ? (
+        <Skeleton className="h-72 rounded-xl" />
+      ) : error ? (
+        <p className="text-sm text-destructive">{error}</p>
+      ) : misses.length === 0 ? (
+        <Card>
+          <EmptyState icon={CircleCheckIcon} title="Every action was cached">
+            The ActionCache served everything this build asked for, or the build
+            recorded no cache lookups.
+          </EmptyState>
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Stat
+              icon={CpuIcon}
+              label="Executed actions"
+              value={totals.missed.toLocaleString()}
+            />
+            <Stat
+              icon={CircleCheckIcon}
+              label="Cache hit rate"
+              value={formatPercent(totals.hitRate)}
+            />
+            <Stat
+              icon={TargetIcon}
+              label="Targets with misses"
+              value={totals.targets.toLocaleString()}
+            />
+          </div>
 
-      <div className="overflow-hidden rounded-lg border bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Label
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Type
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Remote Cache Hit
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Exit Code
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                Duration
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
-                  No misses found.
-                </td>
-              </tr>
-            )}
-            {filtered.map((miss, idx) => (
-              <tr key={`${miss.label}-${idx}`} className="hover:bg-gray-50">
-                <td className="px-4 py-3 text-sm font-medium text-gray-900">{miss.label}</td>
-                <td className="px-4 py-3 text-sm text-gray-700">{miss.type}</td>
-                <td className="px-4 py-3 text-sm text-gray-700">
-                  {miss.remote_cache_hit ? 'Yes' : 'No'}
-                </td>
-                <td className="px-4 py-3 text-sm text-gray-700">{miss.exit_code ?? '-'}</td>
-                <td className="px-4 py-3 text-sm text-gray-700">
-                  {miss.duration_ms !== undefined ? `${miss.duration_ms}ms` : '-'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          <Card className="gap-4">
+            <CardHeader>
+              <CardTitle>Where the cache misses</CardTitle>
+              <CardDescription>
+                Executed actions per mnemonic, the top {TOP_MNEMONICS}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <MnemonicBreakdown misses={misses} />
+            </CardContent>
+          </Card>
+
+          <Card className="gap-0 pb-0">
+            <CardHeader className="pb-4">
+              <CardTitle>By target</CardTitle>
+              <CardDescription>Most misses first.</CardDescription>
+              <CardAction>
+                <SearchInput
+                  value={filter}
+                  onChange={setFilter}
+                  placeholder="Label or mnemonic…"
+                />
+              </CardAction>
+            </CardHeader>
+            <CardContent className="px-0">
+              <div className="max-h-[36rem] overflow-auto border-t">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-card">
+                    <TableRow>
+                      <TableHead className="pl-6">Target</TableHead>
+                      <TableHead>Mnemonic</TableHead>
+                      <TableHead className="text-right">Misses</TableHead>
+                      <TableHead className="pr-6 text-right">Hits</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visible.map((miss, i) => (
+                      <TableRow key={`${miss.label}-${miss.mnemonic}-${i}`}>
+                        <TableCell className="max-w-xl pl-6">
+                          <Link
+                            to={`/targets/${encodeURIComponent(miss.label)}`}
+                            className="block truncate font-mono text-xs hover:text-primary"
+                            title={miss.label}
+                          >
+                            {miss.label}
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary" className="font-mono">
+                            {miss.mnemonic}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">
+                          {miss.misses.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="pr-6 text-right text-muted-foreground tabular-nums">
+                          {miss.hits.toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

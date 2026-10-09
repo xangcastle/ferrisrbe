@@ -1,0 +1,4 @@
+msrv = "1.90.0"
+
+# tonic::Status (176 bytes) es el error de toda RPC de tonic; boxearlo en los helpers no aporta.
+large-error-threshold = 192

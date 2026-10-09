@@ -1,0 +1,27 @@
+module(name = "remote_apis_testing_bazel_client")
+
+bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "abseil-cpp", version = "20260526.0", repo_name = "com_google_absl")
+bazel_dep(name = "googletest", version = "1.18.0", repo_name = "com_google_googletest")
+bazel_dep(name = "gcc_toolchain", version = "0.12.0")
+
+gcc_toolchains = use_extension("@gcc_toolchain//toolchain:module_extensions.bzl", "gcc_toolchains")
+gcc_toolchains.toolchain(
+    name = "gcc_toolchain_x86_64",
+    target_arch = "x86_64",
+)
+gcc_toolchains.toolchain(
+    name = "gcc_toolchain_aarch64",
+    target_arch = "aarch64",
+)
+use_repo(gcc_toolchains, "gcc_toolchain_aarch64", "gcc_toolchain_x86_64")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "abseil-hello",
+    sha256 = "e676640e69e210636de795f571237bec09a9ad9af6e441bf56f0d193cfe1c9fc",
+    strip_prefix = "abseil-hello-b4803b41ab3d58c503265148e5a7d3fd2a8e46d3/bazel-hello",
+    urls = ["https://github.com/abseil/abseil-hello/archive/b4803b41ab3d58c503265148e5a7d3fd2a8e46d3.zip"],
+)

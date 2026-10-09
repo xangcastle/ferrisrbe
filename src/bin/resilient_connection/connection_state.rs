@@ -1,34 +1,45 @@
+//! States of the worker connection and a recorder of their transitions.
+
 use std::fmt;
 use std::time::{Duration, Instant};
-#[allow(unused_imports)]
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-/// Connection state machine for resilient worker connections
+/// Transitions kept by [`StateMachine::history`].
+const HISTORY_LEN: usize = 100;
+
+/// State of the worker's stream to the scheduler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
+    /// No connection, and none in progress.
     Disconnected,
+    /// Establishing the gRPC channel.
     Connecting,
+    /// Channel open, registration not yet acknowledged.
     Handshaking,
+    /// Registered and accepting work.
     Active,
+    /// Accepting work while health checks report a degraded network.
     #[allow(dead_code)]
     Degraded,
+    /// Waiting to reconnect after a loss.
     Reconnecting,
+    /// Lost from a state that does not reconnect.
     Failed,
 }
 
 impl ConnectionState {
-    /// Check if the connection is operational (can receive assignments)
+    /// Whether work assignments can be accepted: `Active` or `Degraded`.
     pub fn is_operational(&self) -> bool {
         matches!(self, ConnectionState::Active | ConnectionState::Degraded)
     }
 
-    /// Check if the connection is in a terminal state
+    /// Whether the state is `Failed`.
     #[allow(dead_code)]
     pub fn is_terminal(&self) -> bool {
         matches!(self, ConnectionState::Failed)
     }
 
-    /// Check if reconnection is allowed from this state
+    /// Whether a loss in this state leads to `Reconnecting` rather than `Failed`.
     pub fn can_reconnect(&self) -> bool {
         matches!(
             self,
@@ -36,7 +47,7 @@ impl ConnectionState {
         )
     }
 
-    /// Get human-readable description
+    /// One-line human-readable description.
     #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
         match self {
@@ -57,7 +68,8 @@ impl fmt::Display for ConnectionState {
     }
 }
 
-/// Tracks state transitions and timing for observability
+/// The current [`ConnectionState`], when it was entered, and the last
+/// [`HISTORY_LEN`] transitions with their reasons.
 pub struct StateMachine {
     current_state: ConnectionState,
     state_history: Vec<(ConnectionState, Instant, Option<String>)>,
@@ -76,7 +88,8 @@ impl StateMachine {
         }
     }
 
-    /// Transition to a new state with optional reason
+    /// Moves to `new_state`, recording `reason`. A transition to the current
+    /// state is a no-op.
     pub fn transition_to(&mut self, new_state: ConnectionState, reason: Option<String>) {
         if self.current_state == new_state {
             return;
@@ -99,33 +112,32 @@ impl StateMachine {
         self.state_entry_time = now;
         self.transition_count += 1;
 
-        if self.state_history.len() > 100 {
+        if self.state_history.len() > HISTORY_LEN {
             self.state_history.remove(0);
         }
     }
 
-    /// Get current state
     pub fn current(&self) -> ConnectionState {
         self.current_state
     }
 
-    /// Get duration in current state
+    /// Time since the current state was entered.
     pub fn duration_in_current(&self) -> Duration {
         Instant::now().duration_since(self.state_entry_time)
     }
 
-    /// Get total number of state transitions
+    /// Transitions since construction.
     pub fn transition_count(&self) -> u64 {
         self.transition_count
     }
 
-    /// Get state history
+    /// Recorded transitions, oldest first, as `(state, entered_at, reason)`.
     #[allow(dead_code)]
     pub fn history(&self) -> &[(ConnectionState, Instant, Option<String>)] {
         &self.state_history
     }
 
-    /// Check if we should attempt reconnection
+    /// [`ConnectionState::can_reconnect`] of the current state.
     pub fn should_reconnect(&self) -> bool {
         self.current_state.can_reconnect()
     }
