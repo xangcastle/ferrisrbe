@@ -13,7 +13,7 @@ importers:
         version: 5.2.8
       axios:
         specifier: ^1.8.0
-        version: 1.18.1
+        version: 1.18.1(debug@4.4.3)
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -39,8 +39,8 @@ importers:
         specifier: ^6.28.0
         version: 6.30.4(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       tailwind-merge:
-        specifier: 3.5.0
-        version: 3.5.0
+        specifier: 3.7.0
+        version: 3.7.0
       tw-animate-css:
         specifier: 1.4.0
         version: 1.4.0
@@ -1681,8 +1681,8 @@ packages:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
 
-  tailwind-merge@3.5.0:
-    resolution: {integrity: sha512-I8K9wewnVDkL1NTGoqWmVEIlUcB9gFriAEkXkfCjX5ib8ezGxtR3xD7iZIxrfArjEsH7F1CHD4RFUtxefdqV/A==}
+  tailwind-merge@3.7.0:
+    resolution: {integrity: sha512-XPPUyAc+cvspz3lHTcR/QgPfW2A0lv/xQNIjX3HGhLR+Nq2lHaLq5MtTesHn8GUr3W3DguT2KT5x3NVgRtYwmA==}
 
   tailwindcss@4.3.3:
     resolution: {integrity: sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==}
@@ -2959,9 +2959,9 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios@1.18.1:
+  axios@1.18.1(debug@4.4.3):
     dependencies:
-      follow-redirects: 1.16.0
+      follow-redirects: 1.16.0(debug@4.4.3)
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -3073,7 +3073,9 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.4
 
-  follow-redirects@1.16.0: {}
+  follow-redirects@1.16.0(debug@4.4.3):
+    optionalDependencies:
+      debug: 4.4.3
 
   form-data@4.0.6:
     dependencies:
@@ -3376,7 +3378,7 @@ snapshots:
 
   source-map-js@1.2.1: {}
 
-  tailwind-merge@3.5.0: {}
+  tailwind-merge@3.7.0: {}
 
   tailwindcss@4.3.3: {}
 
