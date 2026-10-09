@@ -15,7 +15,7 @@
     "clsx": "2.1.1",
     "keycloak-js": "26.2.4",
     "lucide-react": "0.575.0",
-    "radix-ui": "1.4.3",
+    "radix-ui": "1.7.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-router-dom": "^6.28.0",
