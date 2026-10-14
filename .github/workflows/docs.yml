@@ -39,7 +39,7 @@ jobs:
           echo '<meta http-equiv="refresh" content="0;url=./rbe_server/">' > _site/index.html
           touch _site/.nojekyll
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
 
   deploy:
     name: Deploy to GitHub Pages
